@@ -1,13 +1,15 @@
 import pandas as pd
 import matplotlib.pyplot as plt
-from random_access.random_access import *
+from random_access.random_access_rev import *
 
-df = randomaccess_eventdriven(num_channels:=2, 
-                              stas_per_channel:=[5, 10], 
-                              beaconinterval:=100000, 
-                              num_episodes:=10, 
-                              frametxslot:=300, 
-                              per:=[0, 0.5])
+df = simulate_csma(
+    num_channels:=2, 
+    stas_per_channel:=[3, 20], 
+    beaconinterval:=100000, 
+    num_episodes:=10, 
+    frametxslot:=300, 
+    per:=[0, 0]
+)
 
 df = df.sort_values(by=['time', 'channel']).reset_index(drop=True)
 df.to_csv('test.csv', index=False)

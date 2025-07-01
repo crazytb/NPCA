@@ -22,7 +22,7 @@ class Channel:
         self.aoitimestamp[self.retx == 0] = self.currentslot
         self.bo_counter -= skip_slots
 
-    def handle_tx(self, per, slottime):
+    def handle_tx(self, per):
         results = []
         per_rv = random.random()
         ready_sta = np.where(self.bo_counter == 0)[0]
@@ -77,118 +77,8 @@ def randomaccess_eventdriven(num_channels, stas_per_channel, beaconinterval, num
         else:
             for ch in channels:
                 if ch.is_ready():
-                    results = ch.handle_tx(per[ch.channel_id], slottime)
+                    results = ch.handle_tx(per[ch.channel_id])
                     if results:
                         df = pd.concat([df, pd.DataFrame(results)], ignore_index=True)
 
     return df
-
-# def randomaccess(num_channels, stas_per_channel, beaconinterval, num_episodes, frametxslot, per):
-#     slottime = 9
-#     currentslot = np.zeros(num_channels, dtype=int)
-#     # print(f"Data frame length: {frametxslot}")
-#     contentionwindowsize = [2**x for x in range(5, 11)]
-#     bo_stage = np.empty(num_channels, dtype=object)
-#     bo_counter = np.empty(num_channels, dtype=object)
-#     succ_timestamp = np.empty(num_channels, dtype=object)
-#     succ_namestamp = np.empty(num_channels, dtype=object)
-#     num_succ = np.zeros(num_channels, dtype=int)
-#     num_fail = np.zeros(num_channels, dtype=int)
-#     num_coll = np.zeros(num_channels, dtype=int)
-#     # Initialize backoff stage and counter for each channel
-#     retx = np.empty(num_channels, dtype=object)
-#     aoitimestamp = np.empty(num_channels, dtype=object)
-#     for channel in range(num_channels):
-#         # Backoff counter initialize
-#         bo_stage[channel] = np.zeros(stas_per_channel[channel], dtype=int)
-#         bo_counter[channel] = np.array([np.random.randint(contentionwindowsize[x]) for x in bo_stage[channel]], dtype=int)
-#         retx[channel] = np.zeros(stas_per_channel[channel], dtype=int)
-#         aoitimestamp[channel] = np.zeros(stas_per_channel[channel], dtype=int)
-#     df = pd.DataFrame(columns=['time', 'node', 'timestamp', 'result', 'channel'])  # type: ignore
-    
-#     while np.min(currentslot) < num_episodes*beaconinterval/slottime - frametxslot:
-#         for channel in range(num_channels):
-#             per_rv = random.random()
-#             # Idle
-#             if np.min(bo_counter[channel]) != 0:
-#                 currentslot[channel] += np.min(bo_counter[channel])
-#                 aoitimestamp[channel, retx[channel] == 0] = currentslot[channel]
-#                 bo_counter[channel] = bo_counter[channel] - np.min(bo_counter[channel])
-#             # Tx succ
-#             elif (per_rv > per[channel]) and ((np.min(bo_counter[channel]) == 0) and (np.size(bo_counter[channel]) - np.count_nonzero(bo_counter[channel]) == 1)):
-#                 currentslot[channel] += frametxslot
-#                 ind, = np.where(bo_counter[channel] == 0)
-#                 retx[channel, ind] = 0
-#                 # print(f"Time: {currentslot}, Tx success from {ind+1} with AoI {aoi[ind]}")
-#                 df2 = pd.DataFrame({'time': currentslot[channel]*slottime, 
-#                                     'node': ind + 1, 
-#                                     'timestamp': aoitimestamp[channel, ind]*slottime, 
-#                                     'result': 'succ',
-#                                     'channel': channel})
-#                 df = pd.concat([df, df2], ignore_index=True, axis=0)
-#                 aoitimestamp[channel, retx[channel] == 0] = currentslot[channel]
-#                 succ_timestamp = np.append(succ_timestamp, currentslot[channel])
-#                 succ_namestamp = np.append(succ_namestamp, ind[0])
-#                 bo_stage[ind] = 0
-#                 bo_counter[channel, ind] = np.random.randint(contentionwindowsize[0])
-#                 num_succ += 1
-#             # Tx failed
-#             elif (per_rv <= per[channel]) and ((np.min(bo_counter[channel]) == 0) and (np.size(bo_counter[channel]) - np.count_nonzero(bo_counter[channel]) == 1)):
-#                 # aoi[retx == 0] += frametxslot
-#                 currentslot[channel] += frametxslot
-#                 ind, = np.where(bo_counter[channel] == 0)
-#                 retx[channel, ind] = 1
-#                 for x in ind:
-#                     if bo_stage[x] < 5:
-#                         bo_stage[x] += 1
-#                     bo_counter[channel, x] = np.random.randint(contentionwindowsize[bo_stage[x]])
-#                 # print(f"Time: {currentslot}, Tx collision from {ind+1} with AoI {aoi[ind]}")
-#                 df2 = pd.DataFrame({'time': currentslot[channel]*slottime, 
-#                                     'node': ind + 1, 
-#                                     'timestamp': aoitimestamp[channel, ind]*slottime, 
-#                                     'result': 'fail',
-#                                     'channel': channel})
-#                 df = pd.concat([df, df2], ignore_index=True, axis=0)
-#                 aoitimestamp[channel, retx[channel] == 0] = currentslot[channel]
-#                 num_fail += 1
-#             # Tx coll
-#             elif np.min(bo_counter[channel]) == 0 and (np.size(bo_counter[channel]) - np.count_nonzero(bo_counter[channel]) > 1):
-#                 # aoi[retx == 0] += frametxslot
-#                 currentslot[channel] += frametxslot
-#                 ind, = np.where(bo_counter[channel] == 0)
-#                 retx[channel, ind] = 1
-#                 for x in ind:
-#                     if bo_stage[x] < 5:
-#                         bo_stage[x] += 1
-#                     bo_counter[channel, x] = np.random.randint(contentionwindowsize[bo_stage[x]])
-#                 # print(f"Time: {currentslot}, Tx collision from {ind+1} with AoI {aoi[ind]}")
-#                 df2 = pd.DataFrame({'time': currentslot[channel]*slottime, 
-#                                     'node': ind + 1, 
-#                                     'timestamp': aoitimestamp[channel, ind]*slottime, 
-#                                     'result': 'coll',
-#                                     'channel': channel})
-#                 df = pd.concat([df, df2], ignore_index=True, axis=0)
-#                 aoitimestamp[channel, retx[channel] == 0] = currentslot[channel]
-#                 num_coll += 1
-#     return df
-
-# def randomaccess_objectified(num_channels, stas_per_channel, beaconinterval, num_episodes, frametxslot, per):
-#     slottime = 9
-#     sim_slots = int(num_episodes * beaconinterval / slottime)
-#     contentionwindowsize = [2 ** x for x in range(5, 11)]
-#     channels = [Channel(i, stas_per_channel[i], contentionwindowsize, frametxslot) for i in range(num_channels)]
-#     df = pd.DataFrame(columns=['time', 'node', 'timestamp', 'result', 'channel'])
-
-#     for slot in range(sim_slots - frametxslot):
-#         any_tx = False
-#         for ch in channels:
-#             if ch.is_ready():
-#                 results = ch.handle_tx(per[ch.channel_id], slottime)
-#                 if results:
-#                     df = pd.concat([df, pd.DataFrame(results)], ignore_index=True)
-#                     any_tx = True
-#         if not any_tx:
-#             for ch in channels:
-#                 ch.advance_idle()
-
-#     return df
