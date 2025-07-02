@@ -19,7 +19,7 @@ class STA:
         # self.has_packet = True
         self.tx_attempt = False
 
-    def get_new_backoff(bo_stage: int) -> int:
+    def get_new_backoff(self) -> int:
         """
         Return a random backoff counter based on the backoff stage.
         Parameters:
@@ -28,9 +28,9 @@ class STA:
             int: Random backoff counter in range [0, CW[bo_stage]]
         """
         try:
-            cw = CONTENTION_WINDOW[bo_stage]
+            cw = CONTENTION_WINDOW[self.bo_stage]
         except IndexError:
-            raise ValueError(f"Invalid bo_stage={bo_stage}. Must be between 0 and {len(CONTENTION_WINDOW) - 1}.")
+            raise ValueError(f"Invalid bo_stage={self.bo_stage}. Must be between 0 and {len(CONTENTION_WINDOW) - 1}.")
         return np.random.randint(0, cw + 1)
 
     def update_backoff(self, channel_busy):
@@ -116,8 +116,6 @@ def simulate_csma(num_channels, stas_per_channel, beaconinterval, num_episodes, 
             sta = STA(
                 sta_id=sta_id,
                 channel_id=ch_id,
-                cw_min=15,
-                cw_max=1023,
                 npca=npca_flags[ch_id][sta_id]
             )
             stas.append(sta)

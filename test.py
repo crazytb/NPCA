@@ -1,12 +1,19 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 from random_access.random_access_rev import *
+'''
+stas가 13개인 것은 ㅇㅋ.
+random_access.random_access_rev 129번 라인의 for sta in stas:
+    여기서.. stas loop 들면서 channel을 동적으로 access?
+    여튼 이 부분 디버깅하면서 수정해야 할 듯.
+'''
+
 
 df = simulate_csma(
     num_channels:=2, 
-    stas_per_channel:=[3, 20], 
+    stas_per_channel:=[3, 10], 
     beaconinterval:=100000, 
-    num_episodes:=10, 
+    num_episodes:=1, 
     frametxslot:=300, 
     per:=[0, 0]
 )
