@@ -11,18 +11,18 @@ random_access.random_access_rev 129번 라인의 for sta in stas:
 
 df = simulate_csma(
     num_channels:=2, 
-    stas_per_channel:=[3, 10], 
+    stas_per_channel:=[2, 2], 
     beaconinterval:=100000, 
-    num_episodes:=1, 
+    num_episodes:=10, 
     frametxslot:=300, 
-    per:=[0, 0]
+    per:=[0, 0.5]
 )
 
 df = df.sort_values(by=['time', 'channel']).reset_index(drop=True)
 df.to_csv('test.csv', index=False)
 
 # 시뮬레이션 종료 시간
-sim_end_time = df['time'].max()
+sim_end_time = beaconinterval * num_episodes
 
 # 채널별 STA 성능 기록
 channel_sta_tx = {}  # channel -> {sta: time_share}
