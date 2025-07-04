@@ -2,9 +2,9 @@ import numpy as np
 import pandas as pd
 import random
 
-# IEEE 802.11 CW 규격: CWmin = 15, CWmax = 1023
-CONTENTION_WINDOW = [2 ** (i + 4) - 1 for i in range(7)]  # [15, 31, 63, 127, 255, 511, 1023]
+CONTENTION_WINDOW = [2 ** (i + 4) - 1 for i in range(7)]
 SLOTTIME = 9
+
 
 class STA:
     def __init__(self, sta_id, channel_id, npca=False):
@@ -13,8 +13,9 @@ class STA:
         self.current_channel = channel_id
         self.npca = npca
         if npca:
-            self.npca_channel = 1 - channel_id  # assume 2 channels only
+            self.npca_channel = 1 - channel_id
 
+        self.status = 'backoff'
         self.bo_stage = 0
         self.bo_counter = self.get_new_backoff()
         self.aoitimestamp = 0
@@ -23,28 +24,51 @@ class STA:
 
     def get_new_backoff(self):
         cw = CONTENTION_WINDOW[min(self.bo_stage, len(CONTENTION_WINDOW) - 1)]
-        return np.random.randint(0, cw) + 1  # 1부터 시작하는 backoff
+        return np.random.randint(0, cw + 1)
 
     def tick(self, channel_busy):
-        if not channel_busy and self.bo_counter > 0:
-            self.bo_counter -= 1
-        self.tx_attempt = (self.bo_counter == 0 and self.has_packet)
+        if not self.has_packet:
+            self.status = 'idle'
+            self.tx_attempt = False
+            return
+
+        if self.status in ['transmitting', 'waiting_result']:
+            return
+
+        if channel_busy:
+            self.status = 'frozen'
+            self.tx_attempt = False
+        else:
+            if self.bo_counter > 0:
+                self.bo_counter -= 1
+                self.status = 'backoff'
+                self.tx_attempt = False
+            else:
+                self.status = 'transmitting'
+                self.tx_attempt = True
 
     def on_tx_result(self, result, current_slot):
         if result == 'succ':
+            self.status = 'backoff'
             self.bo_stage = 0
             self.bo_counter = self.get_new_backoff()
+            if self.bo_counter == 0:
+                self.bo_counter = 1
             self.has_packet = True
             self.aoitimestamp = current_slot
         elif result in ('coll', 'fail'):
+            self.status = 'backoff'
             self.bo_stage = min(self.bo_stage + 1, len(CONTENTION_WINDOW) - 1)
             self.bo_counter = self.get_new_backoff()
+        else:
+            self.status = 'idle'
+
 
 class Channel:
     def __init__(self, channel_id):
         self.channel_id = channel_id
         self.transmissions = []
-        self.occupied_until = 0  # 채널 점유 끝 슬롯
+        self.occupied_until = 0
 
     def clear(self):
         self.transmissions = []
@@ -59,58 +83,80 @@ class Channel:
             return [(sta, 'coll') for sta in self.transmissions]
         return []
 
-def simulate_csma(num_channels, stas_per_channel, beaconinterval, num_episodes, frametxslot, per, npca_flags=None):
-    total_slots = int(num_episodes * beaconinterval / SLOTTIME)
 
-    if npca_flags is None:
-        npca_flags = [[False] * n for n in stas_per_channel]
+class CSMANetwork:
+    def __init__(self, num_channels, stas_per_channel, beaconinterval, num_episodes, frametxslot, per, npca_flags=None):
+        self.num_channels = num_channels
+        self.stas_per_channel = stas_per_channel
+        self.beaconinterval = beaconinterval
+        self.num_episodes = num_episodes
+        self.frametxslot = frametxslot
+        self.per = per
+        self.total_slots = int(num_episodes * beaconinterval / SLOTTIME) + frametxslot
 
-    # 채널 및 STA 초기화
-    channels = [Channel(i) for i in range(num_channels)]
-    stas = []
-    for ch_id in range(num_channels):
-        for sta_id in range(stas_per_channel[ch_id]):
-            stas.append(STA(sta_id, ch_id, npca=npca_flags[ch_id][sta_id]))
+        if npca_flags is None:
+            npca_flags = [[False] * n for n in stas_per_channel]
 
-    df_log = []
-    pending_results = []
+        self.channels = [Channel(i) for i in range(num_channels)]
+        self.stas = [STA(sta_id, ch_id, npca=npca_flags[ch_id][sta_id])
+                     for ch_id in range(num_channels)
+                     for sta_id in range(stas_per_channel[ch_id])]
+        self.pending_results = {}
+        self.logs = []
+        self.slot = 0
 
-    for slot in range(total_slots):
-        for pr in list(pending_results):
-            end_slot, sta, result, ch_id = pr
-            if end_slot == slot:
-                df_log.append({
+    def run(self):
+        for self.slot in range(self.total_slots):
+            self.tick()
+        return pd.DataFrame(self.logs)
+
+    def tick(self):
+        self._commit_pending_results()
+        self._clear_channels()
+        self._update_sta_statuses()
+        self._collect_tx_attempts()
+        self._resolve_channel_access()
+
+    def _commit_pending_results(self):
+        to_delete = []
+        for (sta, end_slot), (result, ch_id) in self.pending_results.items():
+            if self.slot == end_slot:
+                self.logs.append({
                     'time': end_slot * SLOTTIME,
                     'node': sta.sta_id,
                     'timestamp': sta.aoitimestamp * SLOTTIME,
                     'result': result,
                     'channel': ch_id,
-                    'duration': frametxslot * SLOTTIME
+                    'duration': self.frametxslot * SLOTTIME
                 })
                 sta.on_tx_result(result, end_slot)
-                pending_results.remove(pr)
+                to_delete.append((sta, end_slot))
+        for key in to_delete:
+            del self.pending_results[key]
 
-        for ch in channels:
+    def _clear_channels(self):
+        for ch in self.channels:
             ch.clear()
 
-        for sta in stas:
-            ch = channels[sta.current_channel]
-            channel_busy = (slot < ch.occupied_until)
+    def _update_sta_statuses(self):
+        for sta in self.stas:
+            ch = self.channels[sta.current_channel]
+            channel_busy = (self.slot < ch.occupied_until)
             sta.tick(channel_busy)
 
-        for sta in stas:
+    def _collect_tx_attempts(self):
+        for sta in self.stas:
             if sta.tx_attempt:
-                channels[sta.current_channel].add_tx(sta)
+                self.channels[sta.current_channel].add_tx(sta)
 
-        for ch in channels:
+    def _resolve_channel_access(self):
+        for ch in self.channels:
             results = ch.resolve()
             for sta, result in results:
-                # PER 적용
-                if result == 'succ' and random.random() < per[ch.channel_id]:
+                if result == 'succ' and random.random() < self.per[ch.channel_id]:
                     result = 'fail'
-
-                end_slot = slot + frametxslot
-                pending_results.append((end_slot, sta, result, ch.channel_id))
-                ch.occupied_until = end_slot
-
-    return pd.DataFrame(df_log)
+                end_slot = self.slot + self.frametxslot
+                key = (sta, end_slot)
+                if key not in self.pending_results:
+                    self.pending_results[key] = (result, ch.channel_id)
+                    ch.occupied_until = end_slot

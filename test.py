@@ -9,7 +9,7 @@ random_access.random_access_rev 129번 라인의 for sta in stas:
 '''
 
 
-df = simulate_csma(
+net = CSMANetwork(
     num_channels:=2, 
     stas_per_channel:=[2, 2], 
     beaconinterval:=100000, 
@@ -17,6 +17,8 @@ df = simulate_csma(
     frametxslot:=300, 
     per:=[0, 0.5]
 )
+
+df = net.run()
 
 df = df.sort_values(by=['time', 'channel']).reset_index(drop=True)
 df.to_csv('test.csv', index=False)
