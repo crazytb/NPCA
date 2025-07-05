@@ -3,16 +3,16 @@ import matplotlib.pyplot as plt
 import numpy as np
 from random_access.random_access_rev import SimplifiedCSMACASimulation, SLOTTIME
 
+simulation_time = 100000  # slots
+frame_size = 330  # slots
+    
 def run_multichannel_simulation():
     """Run simulations for different channel configurations"""
     
     # Configuration
     simulation_configs = [
-        {"num_channels": 2, "stas_per_channel": [2, 5], "label": "Default"},
+        {"num_channels": 2, "stas_per_channel": [2, 5], "label": "default"},
     ]
-    
-    simulation_time = 50000  # slots
-    frame_size = 33  # slots
     
     results = {}
     
@@ -27,6 +27,8 @@ def run_multichannel_simulation():
         )
         
         df = sim.run()
+        df.to_csv(f'csma_ca_fsm_log_{config["label"].replace(" ", "_").lower()}.csv', index=False)
+        print(f"Simulation completed: {config['label']}")
         stats = sim.get_statistics()
         
         results[config['label']] = {
@@ -89,7 +91,7 @@ def plot_multichannel_performance(results):
             throughputs = []
             for sta_id, sta_stats in channel_stas:
                 # Throughput = (successful transmissions × frame_size) / total_simulation_time
-                successful_channel_occupation_slots = sta_stats['successful_transmissions'] * 33
+                successful_channel_occupation_slots = sta_stats['successful_transmissions'] * frame_size
                 throughput = successful_channel_occupation_slots / stats['total_slots']
                 throughputs.append(throughput)
             
@@ -183,7 +185,7 @@ def plot_summary_statistics(results):
         channel_names.append(ch_name)
         # Calculate channel throughput as total channel occupation time / total simulation time
         total_successful_transmissions = sum(sta_stats['successful_transmissions'] for _, sta_stats in ch_stas)
-        total_channel_occupation_slots = total_successful_transmissions * 33  # frame_size = 33
+        total_channel_occupation_slots = total_successful_transmissions * frame_size
         channel_throughput = total_channel_occupation_slots / stats['total_slots']
         channel_throughputs.append(channel_throughput)
     
@@ -278,7 +280,7 @@ def print_detailed_results(results):
         total_successful = sum(sta_stats['successful_transmissions'] for sta_stats in stats['stations'].values())
         total_attempts = sum(sta_stats['total_attempts'] for sta_stats in stats['stations'].values())
         total_collisions = sum(sta_stats['collisions'] for sta_stats in stats['stations'].values())
-        system_throughput = (total_successful * 33) / stats['total_slots']
+        system_throughput = (total_successful * frame_size) / stats['total_slots']
         system_success_rate = total_successful / total_attempts if total_attempts > 0 else 0
         
         print(f"System throughput: {system_throughput:.4f} ({system_throughput*100:.2f}%)")
@@ -294,7 +296,7 @@ def print_detailed_results(results):
             if channel_stas:
                 print(f"\n  Channel {ch_id}:")
                 for sta_id, sta_stats in channel_stas:
-                    throughput = (sta_stats['successful_transmissions'] * 33) / stats['total_slots']
+                    throughput = (sta_stats['successful_transmissions'] * frame_size) / stats['total_slots']
                     print(f"    STA {sta_id}: Throughput={throughput:.4f}, "
                           f"AoI={sta_stats['average_aoi_time_us']:.1f}μs, "
                           f"Success={sta_stats['success_rate']:.2%}, "

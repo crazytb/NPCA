@@ -14,6 +14,7 @@ class STAState(Enum):
     IDLE = "idle"
     BACKOFF = "backoff"
     BACKOFF_FROZEN = "backoff_frozen"
+    OBSS_FROZEN = "obss_frozen"
     TRANSMITTING = "transmitting"
 
 @dataclass
@@ -24,6 +25,14 @@ class FrameInfo:
     size: int  # in slots
     timestamp: int  # When frame was originally created
     creation_slot: int  # Slot when frame was created for AoI calculation
+
+@dataclass
+class OBSSTraffic:
+    """OBSS traffic information"""
+    obss_id: int
+    start_slot: int
+    duration: int  # in slots
+    source_channel: int  # Which channel this OBSS traffic originates from
 
 class STAFiniteStateMachine:
     """Simplified 802.11 CSMA/CA Station implemented as FSM"""
@@ -53,6 +62,7 @@ class STAFiniteStateMachine:
         self.successful_transmissions = 0
         self.collision_count = 0
         self.total_attempts = 0
+        self.obss_deferrals = 0  # Count of deferrals due to OBSS
         
         # Flags
         self.has_frame_to_send = False
@@ -69,7 +79,7 @@ class STAFiniteStateMachine:
         self.tx_queue.append(frame)
         self.has_frame_to_send = True
     
-    def update(self, current_slot: int, channel_busy: bool) -> bool:
+    def update(self, current_slot: int, channel_busy: bool, obss_busy: bool = False) -> bool:
         """Update FSM state - returns True if attempting transmission"""
         
         self.tx_attempt = False
@@ -77,16 +87,23 @@ class STAFiniteStateMachine:
         # Skip update if currently transmitting and transmission not finished
         if self.state == STAState.TRANSMITTING and self.transmitting_until > current_slot:
             return False
+        
+        # Count OBSS deferrals for statistics
+        if obss_busy and not channel_busy and self.state in [STAState.BACKOFF, STAState.BACKOFF_FROZEN, STAState.OBSS_FROZEN]:
+            self.obss_deferrals += 1
             
         # Main FSM logic
         if self.state == STAState.IDLE:
             self._handle_idle_state(current_slot)
             
         elif self.state == STAState.BACKOFF:
-            self._handle_backoff(channel_busy)
+            self._handle_backoff(channel_busy, obss_busy)
             
         elif self.state == STAState.BACKOFF_FROZEN:
-            self._handle_backoff_frozen(channel_busy)
+            self._handle_backoff_frozen(channel_busy, obss_busy)
+            
+        elif self.state == STAState.OBSS_FROZEN:
+            self._handle_obss_frozen(channel_busy, obss_busy)
             
         elif self.state == STAState.TRANSMITTING:
             self._handle_transmitting(current_slot)
@@ -104,12 +121,16 @@ class STAFiniteStateMachine:
             self.backoff_counter = self.get_new_backoff()
             self.state = STAState.BACKOFF
     
-    def _handle_backoff(self, channel_busy: bool):
+    def _handle_backoff(self, channel_busy: bool, obss_busy: bool):
         """Handle BACKOFF state"""
         if channel_busy:
+            # Intra-BSS traffic detected - freeze backoff
             self.state = STAState.BACKOFF_FROZEN
+        elif obss_busy:
+            # Only OBSS traffic detected - freeze backoff due to OBSS
+            self.state = STAState.OBSS_FROZEN
         else:
-            # Check if backoff counter is already 0 at the start of this slot
+            # Channel is clear - proceed with backoff countdown
             if self.backoff_counter == 0:
                 self.state = STAState.TRANSMITTING
                 self.tx_attempt = True
@@ -123,9 +144,22 @@ class STAFiniteStateMachine:
                     self.tx_attempt = True
                     self.total_attempts += 1
     
-    def _handle_backoff_frozen(self, channel_busy: bool):
-        """Handle BACKOFF_FROZEN state"""
-        if not channel_busy:
+    def _handle_backoff_frozen(self, channel_busy: bool, obss_busy: bool):
+        """Handle BACKOFF_FROZEN state (frozen due to intra-BSS traffic)"""
+        if not channel_busy and not obss_busy:
+            # Both intra-BSS and OBSS traffic cleared - resume backoff
+            self.state = STAState.BACKOFF
+        elif not channel_busy and obss_busy:
+            # Intra-BSS cleared but OBSS still present - transition to OBSS_FROZEN
+            self.state = STAState.OBSS_FROZEN
+    
+    def _handle_obss_frozen(self, channel_busy: bool, obss_busy: bool):
+        """Handle OBSS_FROZEN state (frozen due to OBSS traffic only)"""
+        if channel_busy:
+            # Intra-BSS traffic appeared - transition to BACKOFF_FROZEN (higher priority)
+            self.state = STAState.BACKOFF_FROZEN
+        elif not obss_busy:
+            # OBSS traffic cleared - resume backoff
             self.state = STAState.BACKOFF
     
     def _handle_transmitting(self, current_slot: int):
@@ -174,7 +208,7 @@ class STAFiniteStateMachine:
             return current_slot - self.frame_creation_slot
 
 class ChannelFSM:
-    """Simplified Channel state machine for CSMA/CA"""
+    """Simplified Channel state machine for CSMA/CA with OBSS support"""
     
     def __init__(self, channel_id: int):
         self.channel_id = channel_id
@@ -182,10 +216,17 @@ class ChannelFSM:
         self.occupied_until = -1
         self.current_frame = None
         self.pending_results = []  # Store pending transmission results
-    
+        
+        # OBSS traffic management
+        self.obss_traffic = []  # List of active OBSS transmissions
+        self.obss_occupied_until = -1  # When OBSS traffic ends
+        
     def update(self, current_slot: int):
         """Update channel state and return completed transmission results"""
         results = []
+        
+        # Update OBSS traffic
+        self._update_obss_traffic(current_slot)
         
         # Check if transmission completed
         if current_slot >= self.occupied_until and self.occupied_until != -1:
@@ -198,6 +239,25 @@ class ChannelFSM:
         
         return results
     
+    def _update_obss_traffic(self, current_slot: int):
+        """Update OBSS traffic status"""
+        # Remove expired OBSS traffic
+        self.obss_traffic = [obss for obss in self.obss_traffic 
+                            if current_slot < obss.start_slot + obss.duration]
+        
+        # Update OBSS occupied until time
+        if self.obss_traffic:
+            self.obss_occupied_until = max(obss.start_slot + obss.duration 
+                                          for obss in self.obss_traffic)
+        else:
+            self.obss_occupied_until = -1
+    
+    def add_obss_traffic(self, obss_traffic: OBSSTraffic):
+        """Add OBSS traffic to this channel"""
+        self.obss_traffic.append(obss_traffic)
+        self.obss_occupied_until = max(self.obss_occupied_until, 
+                                      obss_traffic.start_slot + obss_traffic.duration)
+    
     def add_transmission(self, sta_id: int, frame: FrameInfo):
         """Add transmission attempt"""
         self.transmitting_stations.append((sta_id, frame))
@@ -207,7 +267,7 @@ class ChannelFSM:
         if len(self.transmitting_stations) == 0:
             return
         
-        # Only process if channel is not already occupied
+        # Only process if channel is not already occupied by intra-BSS traffic
         if current_slot >= self.occupied_until:
             if len(self.transmitting_stations) == 1:
                 # Single transmission - will be successful
@@ -226,18 +286,30 @@ class ChannelFSM:
         self.transmitting_stations.clear()
     
     def is_busy(self, current_slot: int) -> bool:
-        """Check if channel is busy"""
+        """Check if channel is busy due to intra-BSS traffic"""
         return current_slot < self.occupied_until
+    
+    def is_obss_busy(self, current_slot: int) -> bool:
+        """Check if channel is busy due to OBSS traffic"""
+        return current_slot < self.obss_occupied_until
+    
+    def is_any_busy(self, current_slot: int) -> bool:
+        """Check if channel is busy due to any traffic (intra-BSS or OBSS)"""
+        return self.is_busy(current_slot) or self.is_obss_busy(current_slot)
 
 class SimplifiedCSMACASimulation:
-    """Simplified CSMA/CA Network Simulation using FSM"""
+    """Simplified CSMA/CA Network Simulation using FSM with realistic OBSS support"""
     
     def __init__(self, num_channels: int, stas_per_channel: List[int], 
-                 simulation_time: int, frame_size: int):
+                 simulation_time: int, frame_size: int, obss_enabled: bool = False,
+                 obss_generation_rate: float = 0.001, obss_frame_size_range: Tuple[int, int] = (20, 50)):
         self.num_channels = num_channels
         self.stas_per_channel = stas_per_channel
         self.simulation_time = simulation_time
         self.frame_size = frame_size
+        self.obss_enabled = obss_enabled
+        self.obss_generation_rate = obss_generation_rate  # Probability per slot per channel
+        self.obss_frame_size_range = obss_frame_size_range  # Min, max OBSS frame size
         
         # Initialize channels
         self.channels = [ChannelFSM(i) for i in range(num_channels)]
@@ -254,6 +326,11 @@ class SimplifiedCSMACASimulation:
         self.current_slot = 0
         self.logs = []
         self.frame_counter = 0
+        self.obss_counter = 0
+        
+        # OBSS statistics
+        self.obss_events_generated = 0
+        self.obss_total_duration = 0
         
         # Generate initial frames for all stations
         self._generate_initial_frames()
@@ -271,6 +348,43 @@ class SimplifiedCSMACASimulation:
             self.frame_counter += 1
             sta.add_frame(frame)
     
+    def _generate_obss_traffic(self, current_slot: int):
+        """Generate OBSS traffic based on probability"""
+        if not self.obss_enabled:
+            return
+        
+        for source_ch in range(self.num_channels):
+            # Check if OBSS traffic should be generated for this channel
+            if np.random.random() < self.obss_generation_rate:
+                # Generate OBSS frame size
+                obss_size = np.random.randint(self.obss_frame_size_range[0], 
+                                            self.obss_frame_size_range[1] + 1)
+                
+                # Create OBSS traffic
+                obss_traffic = OBSSTraffic(
+                    obss_id=self.obss_counter,
+                    start_slot=current_slot,
+                    duration=obss_size,
+                    source_channel=source_ch
+                )
+                self.obss_counter += 1
+                self.obss_events_generated += 1
+                self.obss_total_duration += obss_size
+                
+                # Add OBSS traffic to adjacent channels
+                self._add_obss_to_adjacent_channels(obss_traffic)
+    
+    def _add_obss_to_adjacent_channels(self, obss_traffic: OBSSTraffic):
+        """Add OBSS traffic to adjacent channels"""
+        source_ch = obss_traffic.source_channel
+        
+        # Add to adjacent channels (modeling channel interference)
+        for target_ch in range(self.num_channels):
+            if target_ch != source_ch:  # OBSS affects other channels
+                # In real scenarios, typically adjacent channels are affected
+                # For simplicity, we affect all other channels
+                self.channels[target_ch].add_obss_traffic(obss_traffic)
+    
     def run(self) -> pd.DataFrame:
         """Run the simulation"""
         for self.current_slot in range(self.simulation_time):
@@ -280,6 +394,9 @@ class SimplifiedCSMACASimulation:
     
     def _tick(self):
         """One simulation tick"""
+        # Generate OBSS traffic first
+        self._generate_obss_traffic(self.current_slot)
+        
         # Update channels first and get completed transmission results
         completed_results = {}
         for channel in self.channels:
@@ -301,9 +418,10 @@ class SimplifiedCSMACASimulation:
         for sta in self.stations:
             channel = self.channels[sta.channel_id]
             channel_busy = channel.is_busy(self.current_slot)
+            obss_busy = channel.is_obss_busy(self.current_slot)
             
-            # Update station FSM
-            tx_attempt = sta.update(self.current_slot, channel_busy)
+            # Update station FSM with separate intra-BSS and OBSS busy signals
+            tx_attempt = sta.update(self.current_slot, channel_busy, obss_busy)
             
             # Collect transmission attempts
             if tx_attempt and sta.current_frame:
@@ -338,9 +456,17 @@ class SimplifiedCSMACASimulation:
         # Channel states
         for ch_id, channel in enumerate(self.channels):
             log_entry[f'channel_{ch_id}_busy'] = channel.is_busy(self.current_slot)
-            # Show remaining occupation time instead of absolute time
+            log_entry[f'channel_{ch_id}_obss_busy'] = channel.is_obss_busy(self.current_slot)
+            log_entry[f'channel_{ch_id}_any_busy'] = channel.is_any_busy(self.current_slot)
+            
+            # Show remaining occupation time
             remaining_slots = max(0, channel.occupied_until - self.current_slot)
+            obss_remaining_slots = max(0, channel.obss_occupied_until - self.current_slot)
             log_entry[f'channel_{ch_id}_occupied_until'] = remaining_slots
+            log_entry[f'channel_{ch_id}_obss_occupied_until'] = obss_remaining_slots
+            
+            # Count active OBSS traffic
+            log_entry[f'channel_{ch_id}_active_obss_count'] = len(channel.obss_traffic)
         
         # Station states by channel
         for ch_id in range(self.num_channels):
@@ -351,8 +477,8 @@ class SimplifiedCSMACASimulation:
             log_entry[f'backoff_stage_ch_{ch_id}'] = [sta.backoff_stage for sta in channel_stas]
             log_entry[f'tx_attempts_ch_{ch_id}'] = [sta.tx_attempt for sta in channel_stas]
             log_entry[f'queue_len_ch_{ch_id}'] = [len(sta.tx_queue) for sta in channel_stas]
-            # Add AoI tracking
             log_entry[f'aoi_ch_{ch_id}'] = [sta.get_current_aoi(self.current_slot) for sta in channel_stas]
+            log_entry[f'obss_deferrals_ch_{ch_id}'] = [sta.obss_deferrals for sta in channel_stas]
         
         self.logs.append(log_entry)
     
@@ -361,6 +487,12 @@ class SimplifiedCSMACASimulation:
         stats = {
             'total_slots': self.current_slot,
             'total_time_us': self.current_slot * SLOTTIME,
+            'obss_enabled': self.obss_enabled,
+            'obss_generation_rate': self.obss_generation_rate,
+            'obss_events_generated': self.obss_events_generated,
+            'obss_total_duration_slots': self.obss_total_duration,
+            'obss_total_duration_us': self.obss_total_duration * SLOTTIME,
+            'obss_channel_utilization': self.obss_total_duration / (self.current_slot * self.num_channels) if self.current_slot > 0 else 0,
             'stations': {}
         }
         
@@ -374,6 +506,7 @@ class SimplifiedCSMACASimulation:
                 'successful_transmissions': sta.successful_transmissions,
                 'collisions': sta.collision_count,
                 'total_attempts': sta.total_attempts,
+                'obss_deferrals': sta.obss_deferrals,
                 'success_rate': sta.successful_transmissions / max(1, sta.total_attempts),
                 'final_state': sta.state.value,
                 'final_backoff_stage': sta.backoff_stage,
