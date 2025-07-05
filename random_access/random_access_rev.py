@@ -22,7 +22,8 @@ class FrameInfo:
     frame_id: int
     source: int
     size: int  # in slots
-    timestamp: int
+    timestamp: int  # When frame was originally created
+    creation_slot: int  # Slot when frame was created for AoI calculation
 
 class STAFiniteStateMachine:
     """Simplified 802.11 CSMA/CA Station implemented as FSM"""
@@ -43,6 +44,10 @@ class STAFiniteStateMachine:
         self.tx_queue = []
         self.current_frame = None
         self.transmitting_until = -1
+        
+        # AoI tracking
+        self.frame_creation_slot = 0  # When current frame was created
+        self.last_successful_tx_slot = 0  # When last successful transmission completed
         
         # Statistics
         self.successful_transmissions = 0
@@ -75,7 +80,7 @@ class STAFiniteStateMachine:
             
         # Main FSM logic
         if self.state == STAState.IDLE:
-            self._handle_idle_state()
+            self._handle_idle_state(current_slot)
             
         elif self.state == STAState.BACKOFF:
             self._handle_backoff(channel_busy)
@@ -88,11 +93,13 @@ class STAFiniteStateMachine:
         
         return self.tx_attempt
     
-    def _handle_idle_state(self):
+    def _handle_idle_state(self, current_slot: int):
         """Handle IDLE state"""
         if self.has_frame_to_send and self.tx_queue:
             self.current_frame = self.tx_queue.pop(0)
             self.has_frame_to_send = len(self.tx_queue) > 0
+            # Update AoI tracking - frame creation slot
+            self.frame_creation_slot = self.current_frame.creation_slot
             # Start with random backoff
             self.backoff_counter = self.get_new_backoff()
             self.state = STAState.BACKOFF
@@ -130,7 +137,7 @@ class STAFiniteStateMachine:
             # Transmission completed - wait for channel resolution
             pass
     
-    def on_transmission_result(self, result: str):
+    def on_transmission_result(self, result: str, completion_slot: int):
         """Handle transmission result from channel"""
         if self.state != STAState.TRANSMITTING:
             return
@@ -138,6 +145,7 @@ class STAFiniteStateMachine:
         if result == 'success':
             self.state = STAState.IDLE
             self.successful_transmissions += 1
+            self.last_successful_tx_slot = completion_slot
             self._reset_transmission_params()
         elif result == 'collision':
             self.backoff_stage = min(self.backoff_stage + 1, len(CONTENTION_WINDOW) - 1)
@@ -151,8 +159,19 @@ class STAFiniteStateMachine:
         if not keep_frame:
             self.backoff_stage = 0
             self.current_frame = None
+            # Reset AoI tracking when frame is successfully transmitted
+            self.frame_creation_slot = 0
         self.transmitting_until = -1
         self.tx_attempt = False
+    
+    def get_current_aoi(self, current_slot: int) -> int:
+        """Calculate current Age of Information in slots"""
+        if self.current_frame is None:
+            # No current frame - AoI is time since last successful transmission
+            return current_slot - self.last_successful_tx_slot
+        else:
+            # Current frame exists - AoI is time since frame creation
+            return current_slot - self.frame_creation_slot
 
 class ChannelFSM:
     """Simplified Channel state machine for CSMA/CA"""
@@ -170,8 +189,8 @@ class ChannelFSM:
         
         # Check if transmission completed
         if current_slot >= self.occupied_until and self.occupied_until != -1:
-            # Transmission completed - return results
-            results = self.pending_results.copy()
+            # Transmission completed - return results with completion slot
+            results = [(sta_id, result, current_slot) for sta_id, result in self.pending_results]
             self.pending_results.clear()
             self.transmitting_stations.clear()
             self.current_frame = None
@@ -246,7 +265,8 @@ class SimplifiedCSMACASimulation:
                 frame_id=self.frame_counter,
                 source=sta.sta_id,
                 size=self.frame_size,
-                timestamp=0
+                timestamp=0,
+                creation_slot=0
             )
             self.frame_counter += 1
             sta.add_frame(frame)
@@ -269,13 +289,13 @@ class SimplifiedCSMACASimulation:
         
         # Process completed transmission results
         for ch_id, results in completed_results.items():
-            for sta_id, result in results:
+            for sta_id, result, completion_slot in results:
                 sta = self.stations[sta_id]
-                sta.on_transmission_result(result)
+                sta.on_transmission_result(result, completion_slot)
                 
                 # Generate new frame after successful transmission
                 if result == 'success':
-                    self._generate_new_frame(sta)
+                    self._generate_new_frame(sta, completion_slot)
         
         # Update stations and collect transmission attempts
         for sta in self.stations:
@@ -296,13 +316,14 @@ class SimplifiedCSMACASimulation:
         # Log current state
         self._log_state()
     
-    def _generate_new_frame(self, sta: STAFiniteStateMachine):
+    def _generate_new_frame(self, sta: STAFiniteStateMachine, creation_slot: int):
         """Generate new frame for station after successful transmission"""
         frame = FrameInfo(
             frame_id=self.frame_counter,
             source=sta.sta_id,
             size=self.frame_size,
-            timestamp=self.current_slot
+            timestamp=creation_slot,
+            creation_slot=creation_slot
         )
         self.frame_counter += 1
         sta.add_frame(frame)
@@ -330,6 +351,8 @@ class SimplifiedCSMACASimulation:
             log_entry[f'backoff_stage_ch_{ch_id}'] = [sta.backoff_stage for sta in channel_stas]
             log_entry[f'tx_attempts_ch_{ch_id}'] = [sta.tx_attempt for sta in channel_stas]
             log_entry[f'queue_len_ch_{ch_id}'] = [len(sta.tx_queue) for sta in channel_stas]
+            # Add AoI tracking
+            log_entry[f'aoi_ch_{ch_id}'] = [sta.get_current_aoi(self.current_slot) for sta in channel_stas]
         
         self.logs.append(log_entry)
     
@@ -342,6 +365,10 @@ class SimplifiedCSMACASimulation:
         }
         
         for sta in self.stations:
+            # Calculate average AoI from logs
+            avg_aoi_slots = self._calculate_average_aoi(sta.sta_id)
+            avg_aoi_time = avg_aoi_slots * SLOTTIME
+            
             stats['stations'][sta.sta_id] = {
                 'channel': sta.channel_id,
                 'successful_transmissions': sta.successful_transmissions,
@@ -349,7 +376,31 @@ class SimplifiedCSMACASimulation:
                 'total_attempts': sta.total_attempts,
                 'success_rate': sta.successful_transmissions / max(1, sta.total_attempts),
                 'final_state': sta.state.value,
-                'final_backoff_stage': sta.backoff_stage
+                'final_backoff_stage': sta.backoff_stage,
+                'average_aoi_slots': avg_aoi_slots,
+                'average_aoi_time_us': avg_aoi_time
             }
         
         return stats
+    
+    def _calculate_average_aoi(self, sta_id: int) -> float:
+        """Calculate average AoI for a specific station from logs"""
+        if not self.logs:
+            return 0.0
+        
+        # Find which channel the station belongs to
+        sta = self.stations[sta_id]
+        ch_id = sta.channel_id
+        
+        # Find station index within the channel
+        channel_stas = [s for s in self.stations if s.channel_id == ch_id]
+        sta_index = channel_stas.index(sta)
+        
+        # Extract AoI values from logs
+        aoi_values = []
+        for log_entry in self.logs:
+            aoi_list = log_entry.get(f'aoi_ch_{ch_id}', [])
+            if sta_index < len(aoi_list):
+                aoi_values.append(aoi_list[sta_index])
+        
+        return sum(aoi_values) / len(aoi_values) if aoi_values else 0.0
