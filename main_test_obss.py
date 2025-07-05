@@ -3,21 +3,23 @@ import matplotlib.pyplot as plt
 import numpy as np
 from random_access.random_access_rev import SimplifiedCSMACASimulation, SLOTTIME
 
+simulation_time = 50000  # slots
+frame_size = 33  # slots
+    
 def run_obss_comparison():
     """Run simulations comparing OBSS enabled vs disabled"""
     
     # Configuration
     simulation_configs = [
         {"num_channels": 2, "stas_per_channel": [2, 5], "obss_enabled": False, 
-         "obss_threshold": 0.0, "label": "No OBSS"},
+         "obss_generation_rate": 0.0, "label": "No OBSS"},
         {"num_channels": 2, "stas_per_channel": [2, 5], "obss_enabled": True, 
-         "obss_threshold": 0.3, "label": "OBSS 30%"},
+         "obss_generation_rate": 0.0005, "label": "Low OBSS (0.05%)"},
         {"num_channels": 2, "stas_per_channel": [2, 5], "obss_enabled": True, 
-         "obss_threshold": 0.7, "label": "OBSS 70%"},
+         "obss_generation_rate": 0.002, "label": "High OBSS (0.2%)"},
     ]
     
-    simulation_time = 500000  # slots
-    frame_size = 330  # slots
+
     
     results = {}
     
@@ -30,7 +32,7 @@ def run_obss_comparison():
             simulation_time=simulation_time,
             frame_size=frame_size,
             obss_enabled=config["obss_enabled"],
-            obss_threshold=config["obss_threshold"]
+            obss_generation_rate=config["obss_generation_rate"]
         )
         
         df = sim.run()
@@ -60,7 +62,7 @@ def plot_obss_comparison(results):
     for config_name in config_names:
         stats = results[config_name]['stats']
         total_successful = sum(sta_stats['successful_transmissions'] for sta_stats in stats['stations'].values())
-        system_throughput = (total_successful * 33) / stats['total_slots']
+        system_throughput = (total_successful * frame_size) / stats['total_slots']
         system_throughputs.append(system_throughput)
     
     bars1 = ax1.bar(config_names, system_throughputs, alpha=0.7, color=colors)
@@ -113,24 +115,39 @@ def plot_obss_comparison(results):
         ax3.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 10,
                 f'{int(value)}', ha='center', va='bottom', fontweight='bold')
     
-    # Plot 4: OBSS Interference Events
+    # Plot 4: OBSS Traffic Generation and Duration
     ax4 = axes[1, 1]
     obss_events = []
+    obss_durations = []
     
     for config_name in config_names:
         stats = results[config_name]['stats']
-        obss_count = stats.get('obss_interference_count', 0)
+        obss_count = stats.get('obss_events_generated', 0)
+        obss_duration = stats.get('obss_total_duration_slots', 0)
         obss_events.append(obss_count)
+        obss_durations.append(obss_duration)
     
-    bars4 = ax4.bar(config_names, obss_events, alpha=0.7, color=colors)
-    ax4.set_title('OBSS Interference Events', fontsize=14, fontweight='bold')
-    ax4.set_ylabel('Number of OBSS Events', fontsize=12)
+    x = np.arange(len(config_names))
+    width = 0.35
+    
+    bars4a = ax4.bar(x - width/2, obss_events, width, alpha=0.7, color='lightblue', label='OBSS Events')
+    bars4b = ax4.bar(x + width/2, [d/100 for d in obss_durations], width, alpha=0.7, color='lightcoral', label='OBSS Duration (×100 slots)')
+    
+    ax4.set_title('OBSS Traffic Generation', fontsize=14, fontweight='bold')
+    ax4.set_ylabel('Count / Duration', fontsize=12)
+    ax4.set_xticks(x)
+    ax4.set_xticklabels(config_names)
+    ax4.legend()
     ax4.grid(True, alpha=0.3)
     
     # Add value labels
-    for bar, value in zip(bars4, obss_events):
+    for bar, value in zip(bars4a, obss_events):
         ax4.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 5,
-                f'{int(value)}', ha='center', va='bottom', fontweight='bold')
+                f'{int(value)}', ha='center', va='bottom', fontweight='bold', fontsize=9)
+    
+    for bar, value in zip(bars4b, obss_durations):
+        ax4.text(bar.get_x() + bar.get_width()/2, (value/100) + 5,
+                f'{int(value)}', ha='center', va='bottom', fontweight='bold', fontsize=9)
     
     plt.tight_layout()
     plt.savefig('obss_comparison.png', dpi=300, bbox_inches='tight')
@@ -155,7 +172,7 @@ def plot_channel_specific_obss_impact(results):
                            if sta_stats['channel'] == ch_id]
             
             total_successful = sum(sta_stats['successful_transmissions'] for _, sta_stats in channel_stas)
-            channel_throughput = (total_successful * 33) / stats['total_slots']
+            channel_throughput = (total_successful * frame_size) / stats['total_slots']
             channel_throughputs.append(channel_throughput)
         
         bars = ax_throughput.bar(config_names, channel_throughputs, alpha=0.7, color=colors)
@@ -193,18 +210,15 @@ def plot_channel_specific_obss_impact(results):
     
     # Performance degradation plot
     ax_degradation = axes[0, 2]
-    baseline_throughput = [results[config_names[0]]['stats']]
-    
-    # Calculate throughput degradation compared to no OBSS
     baseline_stats = results[config_names[0]]['stats']
     baseline_total = sum(sta_stats['successful_transmissions'] for sta_stats in baseline_stats['stations'].values())
-    baseline_throughput = (baseline_total * 33) / baseline_stats['total_slots']
+    baseline_throughput = (baseline_total * frame_size) / baseline_stats['total_slots']
     
     degradations = []
     for config_name in config_names[1:]:  # Skip baseline
         stats = results[config_name]['stats']
         total_successful = sum(sta_stats['successful_transmissions'] for sta_stats in stats['stations'].values())
-        throughput = (total_successful * 33) / stats['total_slots']
+        throughput = (total_successful * frame_size) / stats['total_slots']
         degradation = ((baseline_throughput - throughput) / baseline_throughput) * 100
         degradations.append(degradation)
     
@@ -242,6 +256,176 @@ def plot_channel_specific_obss_impact(results):
     plt.tight_layout()
     plt.savefig('obss_channel_impact.png', dpi=300, bbox_inches='tight')
 
+def plot_fsm_states_analysis(results):
+    """Plot FSM states analysis including OBSS_FROZEN"""
+    
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    
+    config_names = list(results.keys())
+    colors = ['skyblue', 'orange', 'lightcoral']
+    
+    # State distribution for each configuration
+    state_types = ['idle', 'backoff', 'backoff_frozen', 'obss_frozen', 'transmitting']
+    
+    for idx, (config_name, result) in enumerate(results.items()):
+        df = result['dataframe']
+        config = result['config']
+        
+        ax = axes[idx // 2, idx % 2]
+        
+        # Count state occurrences for all STAs
+        state_counts = {state: 0 for state in state_types}
+        
+        for ch_id in range(config['num_channels']):
+            states_col = f'states_ch_{ch_id}'
+            if states_col in df.columns:
+                for slot_states in df[states_col]:
+                    for state in slot_states:
+                        if state in state_counts:
+                            state_counts[state] += 1
+        
+        # Create pie chart
+        values = list(state_counts.values())
+        labels = [f'{state}\n({count:,})' for state, count in state_counts.items() if count > 0]
+        colors_pie = plt.cm.Set3(np.linspace(0, 1, len(labels)))
+        
+        if sum(values) > 0:
+            ax.pie([v for v in values if v > 0], labels=labels, autopct='%1.1f%%', 
+                   colors=colors_pie, startangle=90)
+        
+        ax.set_title(f'{config_name}\nFSM State Distribution', fontsize=12, fontweight='bold')
+    
+    # Remove empty subplot if needed
+    if len(results) < 4:
+        for i in range(len(results), 4):
+            axes[i // 2, i % 2].remove()
+    
+    plt.tight_layout()
+    plt.savefig('obss_fsm_states.png', dpi=300, bbox_inches='tight')
+
+def plot_obss_deferrals_analysis(results):
+    """Plot analysis of OBSS deferrals impact"""
+    
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    
+    config_names = list(results.keys())
+    colors = ['skyblue', 'orange', 'lightcoral']
+    
+    # Plot 1: Total OBSS Deferrals per Configuration
+    ax1 = axes[0, 0]
+    
+    total_deferrals = []
+    for config_name in config_names:
+        stats = results[config_name]['stats']
+        deferrals = sum(sta_stats['obss_deferrals'] for sta_stats in stats['stations'].values())
+        total_deferrals.append(deferrals)
+    
+    bars1 = ax1.bar(config_names, total_deferrals, alpha=0.7, color=colors)
+    ax1.set_title('Total OBSS Deferrals', fontsize=12, fontweight='bold')
+    ax1.set_ylabel('OBSS Deferrals Count')
+    ax1.grid(True, alpha=0.3)
+    
+    for bar, value in zip(bars1, total_deferrals):
+        ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 10,
+                f'{int(value)}', ha='center', va='bottom', fontweight='bold')
+    
+    # Plot 2: OBSS Deferrals vs Throughput
+    ax2 = axes[0, 1]
+    
+    throughputs = []
+    deferrals_list = []
+    
+    for config_name in config_names:
+        stats = results[config_name]['stats']
+        total_successful = sum(sta_stats['successful_transmissions'] for sta_stats in stats['stations'].values())
+        throughput = (total_successful * frame_size) / stats['total_slots']
+        deferrals = sum(sta_stats['obss_deferrals'] for sta_stats in stats['stations'].values())
+        
+        throughputs.append(throughput)
+        deferrals_list.append(deferrals)
+    
+    ax2.scatter(deferrals_list, throughputs, s=100, alpha=0.7, c=colors[:len(config_names)])
+    for i, config_name in enumerate(config_names):
+        ax2.annotate(config_name, (deferrals_list[i], throughputs[i]), 
+                    xytext=(5, 5), textcoords='offset points', fontsize=9)
+    
+    ax2.set_title('OBSS Deferrals vs Throughput', fontsize=12, fontweight='bold')
+    ax2.set_xlabel('Total OBSS Deferrals')
+    ax2.set_ylabel('System Throughput')
+    ax2.grid(True, alpha=0.3)
+    
+    # Plot 3: Channel Utilization Breakdown
+    ax3 = axes[1, 0]
+    
+    width = 0.25
+    x = np.arange(len(config_names))
+    
+    intra_utils = []
+    obss_utils = []
+    
+    for config_name in config_names:
+        stats = results[config_name]['stats']
+        
+        # Calculate intra-BSS utilization
+        total_successful = sum(sta_stats['successful_transmissions'] for sta_stats in stats['stations'].values())
+        intra_util = (total_successful * frame_size) / (stats['total_slots'] * 2)  # 2 channels
+        intra_utils.append(intra_util)
+        
+        # Calculate OBSS utilization
+        obss_util = stats.get('obss_channel_utilization', 0)
+        obss_utils.append(obss_util)
+    
+    bars1 = ax3.bar(x - width/2, intra_utils, width, label='Intra-BSS Utilization', alpha=0.7, color='lightblue')
+    bars2 = ax3.bar(x + width/2, obss_utils, width, label='OBSS Utilization', alpha=0.7, color='lightcoral')
+    
+    ax3.set_title('Channel Utilization Breakdown', fontsize=12, fontweight='bold')
+    ax3.set_ylabel('Channel Utilization')
+    ax3.set_xlabel('Configuration')
+    ax3.set_xticks(x)
+    ax3.set_xticklabels(config_names)
+    ax3.legend()
+    ax3.grid(True, alpha=0.3)
+    
+    # Add value labels
+    for bars in [bars1, bars2]:
+        for bar in bars:
+            height = bar.get_height()
+            ax3.text(bar.get_x() + bar.get_width()/2., height + 0.002,
+                    f'{height:.3f}', ha='center', va='bottom', fontsize=9)
+    
+    # Plot 4: Per-STA OBSS Impact
+    ax4 = axes[1, 1]
+    
+    for config_name in config_names:
+        stats = results[config_name]['stats']
+        config = results[config_name]['config']
+        
+        if not config['obss_enabled']:
+            continue
+        
+        # Get AoI and OBSS deferrals for each STA
+        for sta_id, sta_stats in stats['stations'].items():
+            aoi = sta_stats['average_aoi_time_us']
+            deferrals = sta_stats['obss_deferrals']
+            channel = sta_stats['channel']
+            
+            marker = 'o' if channel == 0 else 's'
+            color = colors[list(results.keys()).index(config_name)]
+            label_added = False
+            
+            ax4.scatter(deferrals, aoi, marker=marker, alpha=0.7, color=color, s=60,
+                       label=f'{config_name} Ch{channel}' if not label_added else "")
+            label_added = True
+    
+    ax4.set_title('Per-STA: AoI vs OBSS Deferrals', fontsize=12, fontweight='bold')
+    ax4.set_xlabel('OBSS Deferrals Count')
+    ax4.set_ylabel('Average AoI (μs)')
+    ax4.legend()
+    ax4.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig('obss_deferrals_analysis.png', dpi=300, bbox_inches='tight')
+
 def print_obss_results(results):
     """Print detailed OBSS comparison results"""
     
@@ -257,8 +441,10 @@ def print_obss_results(results):
         print("-" * 50)
         print(f"OBSS Enabled: {stats['obss_enabled']}")
         if stats['obss_enabled']:
-            print(f"OBSS Threshold: {stats['obss_threshold']:.1%}")
-            print(f"OBSS Interference Events: {stats['obss_interference_count']}")
+            print(f"OBSS Generation Rate: {stats['obss_generation_rate']:.1%} per slot")
+            print(f"OBSS Events Generated: {stats['obss_events_generated']}")
+            print(f"OBSS Total Duration: {stats['obss_total_duration_slots']} slots ({stats['obss_total_duration_us']/1000:.1f} ms)")
+            print(f"OBSS Channel Utilization: {stats['obss_channel_utilization']:.1%}")
         
         print(f"Simulation time: {stats['total_time_us']/1000:.1f} ms ({stats['total_slots']} slots)")
         
@@ -266,7 +452,8 @@ def print_obss_results(results):
         total_successful = sum(sta_stats['successful_transmissions'] for sta_stats in stats['stations'].values())
         total_attempts = sum(sta_stats['total_attempts'] for sta_stats in stats['stations'].values())
         total_collisions = sum(sta_stats['collisions'] for sta_stats in stats['stations'].values())
-        system_throughput = (total_successful * 33) / stats['total_slots']
+        total_obss_deferrals = sum(sta_stats['obss_deferrals'] for sta_stats in stats['stations'].values())
+        system_throughput = (total_successful * frame_size) / stats['total_slots']
         system_success_rate = total_successful / total_attempts if total_attempts > 0 else 0
         avg_aoi = np.mean([sta_stats['average_aoi_time_us'] for sta_stats in stats['stations'].values()])
         
@@ -275,6 +462,7 @@ def print_obss_results(results):
         print(f"Average AoI: {avg_aoi:.1f} μs")
         print(f"Total successful transmissions: {total_successful}")
         print(f"Total collisions: {total_collisions}")
+        print(f"Total OBSS deferrals: {total_obss_deferrals}")
         
         # Per-channel breakdown
         for ch_id in range(config['num_channels']):
@@ -282,13 +470,14 @@ def print_obss_results(results):
                           if sta_stats['channel'] == ch_id]
             
             if channel_stas:
-                ch_throughput = sum((sta_stats['successful_transmissions'] * 33) / stats['total_slots'] 
+                ch_throughput = sum((sta_stats['successful_transmissions'] * frame_size) / stats['total_slots'] 
                                   for _, sta_stats in channel_stas)
                 ch_aoi = np.mean([sta_stats['average_aoi_time_us'] for _, sta_stats in channel_stas])
                 ch_collisions = sum(sta_stats['collisions'] for _, sta_stats in channel_stas)
+                ch_obss_deferrals = sum(sta_stats['obss_deferrals'] for _, sta_stats in channel_stas)
                 
                 print(f"  Channel {ch_id}: Throughput={ch_throughput:.4f}, "
-                      f"Avg AoI={ch_aoi:.1f}μs, Collisions={ch_collisions}")
+                      f"Avg AoI={ch_aoi:.1f}μs, Collisions={ch_collisions}, OBSS Deferrals={ch_obss_deferrals}")
     
     # Calculate performance impact
     print(f"\n📈 OBSS PERFORMANCE IMPACT")
@@ -296,14 +485,13 @@ def print_obss_results(results):
     
     baseline_name = list(results.keys())[0]  # Assuming first is baseline (No OBSS)
     baseline_stats = results[baseline_name]['stats']
-    baseline_throughput = sum(sta_stats['successful_transmissions'] for sta_stats in baseline_stats['stations'].values()) * 33 / baseline_stats['total_slots']
+    baseline_throughput = sum(sta_stats['successful_transmissions'] for sta_stats in baseline_stats['stations'].values()) * frame_size / baseline_stats['total_slots']
     baseline_aoi = np.mean([sta_stats['average_aoi_time_us'] for sta_stats in baseline_stats['stations'].values()])
     
     for config_name, result in list(results.items())[1:]:  # Skip baseline
         stats = result['stats']
-        config = result['config']
         
-        current_throughput = sum(sta_stats['successful_transmissions'] for sta_stats in stats['stations'].values()) * 33 / stats['total_slots']
+        current_throughput = sum(sta_stats['successful_transmissions'] for sta_stats in stats['stations'].values()) * frame_size / stats['total_slots']
         current_aoi = np.mean([sta_stats['average_aoi_time_us'] for sta_stats in stats['stations'].values()])
         
         throughput_degradation = ((baseline_throughput - current_throughput) / baseline_throughput) * 100
@@ -312,55 +500,8 @@ def print_obss_results(results):
         print(f"{config_name}:")
         print(f"  Throughput degradation: {throughput_degradation:.1f}%")
         print(f"  AoI increase: {aoi_increase:.1f}%")
-        print(f"  OBSS events: {stats['obss_interference_count']}")
-
-def plot_obss_time_series(results):
-    """Plot time series showing OBSS interference events"""
-    
-    fig, axes = plt.subplots(len(results), 1, figsize=(12, 4 * len(results)))
-    if len(results) == 1:
-        axes = [axes]
-    
-    for idx, (config_name, result) in enumerate(results.items()):
-        df = result['dataframe']
-        config = result['config']
-        
-        if not config['obss_enabled']:
-            continue
-            
-        ax = axes[idx]
-        
-        # Plot channel busy status and OBSS interference
-        slots = df['slot'].values
-        
-        # Sample every 100 slots for readability
-        sample_rate = 100
-        sample_slots = slots[::sample_rate]
-        
-        for ch_id in range(config['num_channels']):
-            ch_busy = df[f'channel_{ch_id}_busy'].values[::sample_rate]
-            obss_interference = df[f'channel_{ch_id}_obss_interference'].values[::sample_rate]
-            
-            # Plot channel busy periods
-            ax.plot(sample_slots, ch_busy + ch_id * 2.5, 
-                   label=f'Ch{ch_id} Busy', linewidth=1, alpha=0.7)
-            
-            # Plot OBSS interference events
-            obss_slots = sample_slots[obss_interference]
-            obss_levels = np.ones(len(obss_slots)) * (ch_id * 2.5 + 0.5)
-            ax.scatter(obss_slots, obss_levels, 
-                      color='red', marker='x', s=20, alpha=0.8,
-                      label=f'Ch{ch_id} OBSS' if ch_id == 0 else "")
-        
-        ax.set_title(f'{config_name} - Channel Activity & OBSS Events', fontsize=12)
-        ax.set_xlabel('Time Slot')
-        ax.set_ylabel('Channel Activity')
-        ax.legend()
-        ax.grid(True, alpha=0.3)
-        ax.set_ylim(-0.5, config['num_channels'] * 2.5)
-    
-    plt.tight_layout()
-    plt.savefig('obss_time_series.png', dpi=300, bbox_inches='tight')
+        print(f"  OBSS events generated: {stats['obss_events_generated']}")
+        print(f"  Total OBSS deferrals: {sum(sta_stats['obss_deferrals'] for sta_stats in stats['stations'].values())}")
 
 if __name__ == "__main__":
     # Run OBSS comparison simulations
@@ -374,8 +515,11 @@ if __name__ == "__main__":
     print("Generating channel-specific OBSS impact plots...")
     plot_channel_specific_obss_impact(results)
     
-    print("Generating OBSS time series plots...")
-    plot_obss_time_series(results)
+    print("Generating FSM states analysis...")
+    plot_fsm_states_analysis(results)
+    
+    print("Generating OBSS deferrals analysis...")
+    plot_obss_deferrals_analysis(results)
     
     # Print detailed results
     print_obss_results(results)
@@ -383,5 +527,6 @@ if __name__ == "__main__":
     print("\n✅ OBSS Analysis complete!")
     print("📁 Plots saved as:")
     print("   - obss_comparison.png")
-    print("   - obss_channel_impact.png") 
-    print("   - obss_time_series.png")
+    print("   - obss_channel_impact.png")
+    print("   - obss_fsm_states.png")
+    print("   - obss_deferrals_analysis.png")
