@@ -33,6 +33,100 @@ class OBSSTraffic:
     start_slot: int
     duration: int  # in slots
     source_channel: int  # Which channel this OBSS traffic originates from
+    
+@dataclass
+class PendingOBSSTraffic:
+    """Pending OBSS traffic information"""
+    obss_id: int
+    duration: int
+    source_channel: int
+    creation_slot: int
+    
+class OBSSGenerator:
+    """OBSS traffic generator with backoff mechanism"""
+    
+    def __init__(self, source_channel: int, generation_rate: float, frame_size_range: Tuple[int, int]):
+        self.source_channel = source_channel
+        self.generation_rate = generation_rate
+        self.frame_size_range = frame_size_range
+        
+        # OBSS backoff state
+        self.pending_traffic = None
+        self.backoff_counter = 0
+        self.obss_id_counter = 0
+        
+        # Statistics
+        self.obss_generated = 0
+        self.obss_deferred = 0
+        self.obss_blocked_by_intra_bss = 0
+        self.obss_blocked_by_other_obss = 0
+    
+    def attempt_generation(self, current_slot: int, intra_bss_busy: bool, other_obss_busy: bool) -> Optional[OBSSTraffic]:
+        """Attempt to generate OBSS traffic with backoff mechanism"""
+    
+        channel_busy = intra_bss_busy or other_obss_busy
+        
+        # === Phase 1: Handle pending OBSS traffic ===
+        if self.pending_traffic:
+            if channel_busy:
+                # Channel busy - freeze backoff and count deferrals
+                if intra_bss_busy:
+                    self.obss_blocked_by_intra_bss += 1
+                if other_obss_busy:
+                    self.obss_blocked_by_other_obss += 1
+                self.obss_deferred += 1
+                return None
+            else:
+                # Channel clear - proceed with backoff
+                if self.backoff_counter > 0:
+                    self.backoff_counter -= 1
+                    return None
+                else:
+                    # Backoff completed - generate OBSS traffic
+                    traffic = OBSSTraffic(
+                        obss_id=self.pending_traffic.obss_id,
+                        start_slot=current_slot,
+                        duration=self.pending_traffic.duration,
+                        source_channel=self.pending_traffic.source_channel
+                    )
+                    self.pending_traffic = None
+                    self.obss_generated += 1
+                    return traffic
+        
+        # === Phase 2: Attempt new OBSS traffic generation ===
+        if np.random.random() < self.generation_rate:
+            obss_size = np.random.randint(self.frame_size_range[0], self.frame_size_range[1] + 1)
+            
+            if channel_busy:
+                # Channel busy - create pending traffic and start backoff
+                self.pending_traffic = PendingOBSSTraffic(
+                    obss_id=self.obss_id_counter,
+                    duration=obss_size,
+                    source_channel=self.source_channel,
+                    creation_slot=current_slot
+                )
+                self.obss_id_counter += 1
+                self.backoff_counter = np.random.randint(0, 32)  # Simple backoff window
+                
+                if intra_bss_busy:
+                    self.obss_blocked_by_intra_bss += 1
+                if other_obss_busy:
+                    self.obss_blocked_by_other_obss += 1
+                self.obss_deferred += 1
+                return None
+            else:
+                # Channel clear - generate immediately
+                traffic = OBSSTraffic(
+                    obss_id=self.obss_id_counter,
+                    start_slot=current_slot,
+                    duration=obss_size,
+                    source_channel=self.source_channel
+                )
+                self.obss_id_counter += 1
+                self.obss_generated += 1
+                return traffic
+        
+        return None
 
 class STAFiniteStateMachine:
     """Simplified 802.11 CSMA/CA Station implemented as FSM"""
@@ -63,6 +157,7 @@ class STAFiniteStateMachine:
         self.collision_count = 0
         self.total_attempts = 0
         self.obss_deferrals = 0  # Count of deferrals due to OBSS
+        self.intra_bss_deferrals = 0
         
         # Flags
         self.has_frame_to_send = False
@@ -88,9 +183,16 @@ class STAFiniteStateMachine:
         if self.state == STAState.TRANSMITTING and self.transmitting_until > current_slot:
             return False
         
-        # Count OBSS deferrals for statistics
-        if obss_busy and not channel_busy and self.state in [STAState.BACKOFF, STAState.BACKOFF_FROZEN, STAState.OBSS_FROZEN]:
-            self.obss_deferrals += 1
+        # ✅ 지연 통계 카운팅 (기존 코드 완전 교체)
+        if self.state in [STAState.BACKOFF, STAState.BACKOFF_FROZEN, STAState.OBSS_FROZEN]:
+            if channel_busy and not obss_busy:
+                self.intra_bss_deferrals += 1
+            elif obss_busy and not channel_busy:
+                self.obss_deferrals += 1
+            elif channel_busy and obss_busy:
+                # 둘 다 있으면 intra-BSS가 우선순위 높음
+                self.intra_bss_deferrals += 1
+            # channel_busy=False, obss_busy=False인 경우는 지연 없음
             
         # Main FSM logic
         if self.state == STAState.IDLE:
@@ -298,7 +400,7 @@ class ChannelFSM:
         return self.is_busy(current_slot) or self.is_obss_busy(current_slot)
 
 class SimplifiedCSMACASimulation:
-    """Simplified CSMA/CA Network Simulation using FSM with realistic OBSS support"""
+    """Simplified CSMA/CA Network Simulation with mutual OBSS interference"""
     
     def __init__(self, num_channels: int, stas_per_channel: List[int], 
                  simulation_time: int, frame_size: int, obss_enabled: bool = False,
@@ -308,8 +410,8 @@ class SimplifiedCSMACASimulation:
         self.simulation_time = simulation_time
         self.frame_size = frame_size
         self.obss_enabled = obss_enabled
-        self.obss_generation_rate = obss_generation_rate  # Probability per slot per channel
-        self.obss_frame_size_range = obss_frame_size_range  # Min, max OBSS frame size
+        self.obss_generation_rate = obss_generation_rate
+        self.obss_frame_size_range = obss_frame_size_range
         
         # Initialize channels
         self.channels = [ChannelFSM(i) for i in range(num_channels)]
@@ -322,15 +424,21 @@ class SimplifiedCSMACASimulation:
                 self.stations.append(STAFiniteStateMachine(sta_id, ch_id))
                 sta_id += 1
         
+        # Initialize OBSS generators (one per channel)
+        self.obss_generators = []
+        if self.obss_enabled:
+            for ch_id in range(num_channels):
+                generator = OBSSGenerator(
+                    source_channel=ch_id,
+                    generation_rate=obss_generation_rate,
+                    frame_size_range=obss_frame_size_range
+                )
+                self.obss_generators.append(generator)
+        
         # Simulation state
         self.current_slot = 0
         self.logs = []
         self.frame_counter = 0
-        self.obss_counter = 0
-        
-        # OBSS statistics
-        self.obss_events_generated = 0
-        self.obss_total_duration = 0
         
         # Generate initial frames for all stations
         self._generate_initial_frames()
@@ -348,42 +456,32 @@ class SimplifiedCSMACASimulation:
             self.frame_counter += 1
             sta.add_frame(frame)
     
+    def _get_affected_channels(self, source_channel: int) -> List[int]:
+        """Each channel has independent OBSS - no cross-channel interference"""
+        return [source_channel]
+    
     def _generate_obss_traffic(self, current_slot: int):
-        """Generate OBSS traffic based on probability"""
+        """Generate OBSS traffic with mutual interference consideration"""
         if not self.obss_enabled:
             return
         
-        for source_ch in range(self.num_channels):
-            # Check if OBSS traffic should be generated for this channel
-            if np.random.random() < self.obss_generation_rate:
-                # Generate OBSS frame size
-                obss_size = np.random.randint(self.obss_frame_size_range[0], 
-                                            self.obss_frame_size_range[1] + 1)
-                
-                # Create OBSS traffic
-                obss_traffic = OBSSTraffic(
-                    obss_id=self.obss_counter,
-                    start_slot=current_slot,
-                    duration=obss_size,
-                    source_channel=source_ch
-                )
-                self.obss_counter += 1
-                self.obss_events_generated += 1
-                self.obss_total_duration += obss_size
-                
-                # Add OBSS traffic to adjacent channels
-                self._add_obss_to_adjacent_channels(obss_traffic)
-    
-    def _add_obss_to_adjacent_channels(self, obss_traffic: OBSSTraffic):
-        """Add OBSS traffic to adjacent channels"""
-        source_ch = obss_traffic.source_channel
-        
-        # Add to adjacent channels (modeling channel interference)
-        for target_ch in range(self.num_channels):
-            if target_ch != source_ch:  # OBSS affects other channels
-                # In real scenarios, typically adjacent channels are affected
-                # For simplicity, we affect all other channels
-                self.channels[target_ch].add_obss_traffic(obss_traffic)
+        # Generate OBSS traffic for each channel
+        for generator in self.obss_generators:
+            source_ch = generator.source_channel
+            
+            # Check channel status for OBSS generation
+            intra_bss_busy = self.channels[source_ch].is_busy(current_slot)
+            other_obss_busy = self.channels[source_ch].is_obss_busy(current_slot)
+            
+            # Attempt OBSS generation (with backoff if channel busy)
+            obss_traffic = generator.attempt_generation(current_slot, intra_bss_busy, other_obss_busy)
+            
+            if obss_traffic:
+                # Add OBSS traffic to affected channels
+                affected_channels = self._get_affected_channels(source_ch)
+                for target_ch in affected_channels:
+                    if 0 <= target_ch < self.num_channels:
+                        self.channels[target_ch].add_obss_traffic(obss_traffic)
     
     def run(self) -> pd.DataFrame:
         """Run the simulation"""
@@ -394,7 +492,7 @@ class SimplifiedCSMACASimulation:
     
     def _tick(self):
         """One simulation tick"""
-        # Generate OBSS traffic first
+        # Generate OBSS traffic first (with mutual interference consideration)
         self._generate_obss_traffic(self.current_slot)
         
         # Update channels first and get completed transmission results
@@ -479,20 +577,37 @@ class SimplifiedCSMACASimulation:
             log_entry[f'queue_len_ch_{ch_id}'] = [len(sta.tx_queue) for sta in channel_stas]
             log_entry[f'aoi_ch_{ch_id}'] = [sta.get_current_aoi(self.current_slot) for sta in channel_stas]
             log_entry[f'obss_deferrals_ch_{ch_id}'] = [sta.obss_deferrals for sta in channel_stas]
+            log_entry[f'intra_bss_deferrals_ch_{ch_id}'] = [sta.intra_bss_deferrals for sta in channel_stas]
         
         self.logs.append(log_entry)
     
     def get_statistics(self) -> Dict:
         """Get simulation statistics"""
+        # Aggregate OBSS generator statistics
+        total_obss_generated = sum(gen.obss_generated for gen in self.obss_generators) if self.obss_generators else 0
+        total_obss_deferred = sum(gen.obss_deferred for gen in self.obss_generators) if self.obss_generators else 0
+        total_obss_blocked_by_intra = sum(gen.obss_blocked_by_intra_bss for gen in self.obss_generators) if self.obss_generators else 0
+        total_obss_blocked_by_other_obss = sum(gen.obss_blocked_by_other_obss for gen in self.obss_generators) if self.obss_generators else 0
+        
+        # Calculate total OBSS duration
+        total_obss_duration = 0
+        if self.obss_generators:
+            for gen in self.obss_generators:
+                total_obss_duration += gen.obss_generated * np.mean(self.obss_frame_size_range)
+        
         stats = {
             'total_slots': self.current_slot,
             'total_time_us': self.current_slot * SLOTTIME,
             'obss_enabled': self.obss_enabled,
             'obss_generation_rate': self.obss_generation_rate,
-            'obss_events_generated': self.obss_events_generated,
-            'obss_total_duration_slots': self.obss_total_duration,
-            'obss_total_duration_us': self.obss_total_duration * SLOTTIME,
-            'obss_channel_utilization': self.obss_total_duration / (self.current_slot * self.num_channels) if self.current_slot > 0 else 0,
+            'obss_events_generated': total_obss_generated,
+            'obss_events_deferred': total_obss_deferred,
+            'obss_blocked_by_intra_bss': total_obss_blocked_by_intra,
+            'obss_blocked_by_other_obss': total_obss_blocked_by_other_obss,
+            'obss_total_duration_slots': int(total_obss_duration),
+            'obss_total_duration_us': int(total_obss_duration * SLOTTIME),
+            'obss_channel_utilization': total_obss_duration / (self.current_slot * self.num_channels) if self.current_slot > 0 else 0,
+            'mutual_interference_events': total_obss_blocked_by_intra + total_obss_deferred,
             'stations': {}
         }
         
@@ -507,6 +622,8 @@ class SimplifiedCSMACASimulation:
                 'collisions': sta.collision_count,
                 'total_attempts': sta.total_attempts,
                 'obss_deferrals': sta.obss_deferrals,
+                'intra_bss_deferrals': sta.intra_bss_deferrals,
+                'total_deferrals': sta.obss_deferrals + sta.intra_bss_deferrals,
                 'success_rate': sta.successful_transmissions / max(1, sta.total_attempts),
                 'final_state': sta.state.value,
                 'final_backoff_stage': sta.backoff_stage,
