@@ -1,7 +1,7 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
-from random_access.random_access_with_npca import SimplifiedCSMACASimulation, SLOTTIME
+from tempfiles.random_access_with_npca import SimplifiedCSMACASimulation, SLOTTIME
 
 def run_npca_comparison_simulation():
     """Run simulations comparing CSMA/CA with and without NPCA under various OBSS conditions"""

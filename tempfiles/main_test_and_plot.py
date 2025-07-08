@@ -1,7 +1,7 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
-from random_access.random_access_rev import SimplifiedCSMACASimulation, SLOTTIME
+from random_access.random_access import SimplifiedCSMACASimulation, SLOTTIME
 
 simulation_time = 100000  # slots
 frame_size = 330  # slots

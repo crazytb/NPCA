@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from random_access.random_access_rev import SimplifiedCSMACASimulation, SLOTTIME
+from random_access.random_access import SimplifiedCSMACASimulation, SLOTTIME
 from random_access.configs import *
 
 def run_obss_comparison(simulation_configs):

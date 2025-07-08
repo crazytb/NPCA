@@ -1,6 +1,6 @@
 import pandas as pd
 import matplotlib.pyplot as plt
-from random_access.random_access_rev import *
+from random_access.random_access import *
 
 if __name__ == "__main__":
     # Create simulation

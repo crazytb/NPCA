@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from random_access.random_access import randomaccess
+from tempfiles.random_access import randomaccess
 
 if __name__ == "__main__":
     dflog = randomaccess(numnodes:=10, beaconinterval:=100000*100, frametxslot:=300, per:=0)
