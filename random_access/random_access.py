@@ -15,8 +15,9 @@ class STAState(Enum):
     BACKOFF = "backoff"
     BACKOFF_FROZEN = "backoff_frozen"
     OBSS_FROZEN = "obss_frozen"
-    NPCA_BACKOFF = "npca_backoff"  # 새로 추가: NPCA 백오프 상태
-    TRANSMITTING = "transmitting"
+    NPCA_BACKOFF = "npca_backoff"
+    PRIMARY_TRANSMITTING = "primary_transmitting"  # 원래 채널에서 전송
+    NPCA_TRANSMITTING = "npca_transmitting"        # NPCA 채널에서 전송
 
 @dataclass
 class FrameInfo:
@@ -196,22 +197,22 @@ class STAFiniteStateMachine:
         self.has_frame_to_send = True
     
     def update(self, current_slot: int, channel_status: Dict[int, Dict], obss_occupied_until: Dict[int, int]) -> Tuple[bool, int]:
-        """
-        Update FSM state with NPCA support
-        channel_status = {ch_id: {'intra_busy': bool, 'obss_busy': bool, 'any_busy': bool}}
-        obss_occupied_until = {ch_id: occupied_until_slot}
-        Returns: (tx_attempt, target_channel)
-        """
+        """Update FSM state with NPCA support"""
         
         self.tx_attempt = False
-        target_channel = self.channel_id  # 기본적으로 primary 채널
+        target_channel = self.channel_id
         
         # Skip update if currently transmitting and transmission not finished
-        if self.state == STAState.TRANSMITTING and self.transmitting_until > current_slot:
+        if self.state in [STAState.PRIMARY_TRANSMITTING, STAState.NPCA_TRANSMITTING] and \
+        self.transmitting_until > current_slot:
             return False, target_channel
         
         # Primary 채널 상태 가져오기
-        primary_status = channel_status.get(self.channel_id, {'intra_busy': False, 'obss_busy': False, 'any_busy': False})
+        primary_status = channel_status.get(self.channel_id, {
+            'intra_busy': False, 
+            'obss_busy': False, 
+            'any_busy': False
+        })
         channel_busy = primary_status['intra_busy']
         obss_busy = primary_status['obss_busy']
         
@@ -241,52 +242,51 @@ class STAFiniteStateMachine:
         elif self.state == STAState.NPCA_BACKOFF:
             target_channel = self._handle_npca_backoff(current_slot, channel_status, obss_occupied_until)
             
-        elif self.state == STAState.TRANSMITTING:
+        elif self.state in [STAState.PRIMARY_TRANSMITTING, STAState.NPCA_TRANSMITTING]:
             self._handle_transmitting(current_slot)
         
         return self.tx_attempt, target_channel
     
     def _handle_idle_state(self, current_slot: int):
-        """Handle IDLE state"""
+        """Handle IDLE state - 참고용으로 포함"""
         if self.has_frame_to_send and self.tx_queue:
             self.current_frame = self.tx_queue.pop(0)
             self.has_frame_to_send = len(self.tx_queue) > 0
+            # AoI tracking - frame creation slot
             self.frame_creation_slot = self.current_frame.creation_slot
+            # Start with random backoff
             self.backoff_counter = self.get_new_backoff()
             self.state = STAState.BACKOFF
     
-    def _handle_backoff(self, channel_busy: bool, obss_busy: bool, obss_occupied_until: int, 
-                       current_slot: int, all_channels_info: Dict):
-        """Handle BACKOFF state with NPCA transition logic"""
+    def _handle_backoff(self, channel_busy: bool, obss_busy: bool):
+        """Handle BACKOFF state"""
         if channel_busy:
             self.state = STAState.BACKOFF_FROZEN
         elif obss_busy:
-            # OBSS 감지 - NPCA 조건 확인
-            if self.npca_enabled and obss_occupied_until > current_slot:
-                # NPCA 시도 조건 충족
-                self._attempt_npca(current_slot, obss_occupied_until, all_channels_info)
-            else:
-                # 일반 OBSS_FROZEN 상태
-                self.state = STAState.OBSS_FROZEN
+            self.state = STAState.OBSS_FROZEN
         else:
-            # 채널 clear - 백오프 진행
             if self.backoff_counter == 0:
-                self.state = STAState.TRANSMITTING
+                # Primary 채널에서 전송
+                self.state = STAState.PRIMARY_TRANSMITTING
                 self.tx_attempt = True
                 self.total_attempts += 1
             else:
                 self.backoff_counter -= 1
                 if self.backoff_counter == 0:
-                    self.state = STAState.TRANSMITTING
+                    # Primary 채널에서 전송
+                    self.state = STAState.PRIMARY_TRANSMITTING
                     self.tx_attempt = True
                     self.total_attempts += 1
     
     def _handle_backoff_frozen(self, channel_busy: bool, obss_busy: bool):
         """Handle BACKOFF_FROZEN state (frozen due to intra-BSS traffic)"""
         if not channel_busy and not obss_busy:
+            # 모든 트래픽이 사라짐 - 일반 BACKOFF로 복귀
             self.state = STAState.BACKOFF
         elif not channel_busy and obss_busy:
+            # Intra-BSS는 사라지고 OBSS만 남음 - OBSS_FROZEN으로 전환
             self.state = STAState.OBSS_FROZEN
+        # else: channel_busy가 True인 경우 - BACKOFF_FROZEN 상태 유지
     
     def _handle_obss_frozen(self, channel_busy: bool, obss_busy: bool, current_slot: int,
                        channel_status: Dict[int, Dict], obss_occupied_until: Dict[int, int]) -> int:
@@ -313,7 +313,7 @@ class STAFiniteStateMachine:
         primary_obss_until = obss_occupied_until.get(self.channel_id, current_slot)
         remaining_obss_slots = max(0, primary_obss_until - current_slot)
         
-        # OBSS가 충분히 길어야 NPCA 시도 의미가 있음 (최소 몇 슬롯 이상)
+        # OBSS가 충분히 길어야 NPCA 시도 의미가 있음
         min_npca_duration = 5  # 최소 5슬롯 이상 남아있어야 NPCA 시도
         if remaining_obss_slots < min_npca_duration:
             return self.channel_id
@@ -330,7 +330,7 @@ class STAFiniteStateMachine:
             self.npca_blocked += 1
             return self.channel_id
         
-        # 3. NPCA 시도 - 첫 번째 available 채널 선택 (나중에 더 똑똑한 선택 가능)
+        # 3. NPCA 시도 - 첫 번째 available 채널 선택
         selected_npca_channel = available_npca_channels[0]
         
         # 4. NPCA 파라미터 설정
@@ -341,14 +341,17 @@ class STAFiniteStateMachine:
         # 5. NPCA_BACKOFF 상태로 전환
         self.state = STAState.NPCA_BACKOFF
         
-        return self.channel_id
+        return self.channel_id  # 아직 전송하지 않음
     
     def _handle_npca_backoff(self, current_slot: int, channel_status: Dict[int, Dict], 
                         obss_occupied_until: Dict[int, int]) -> int:
         """Handle NPCA_BACKOFF state"""
         
         # 1. Primary 채널의 OBSS 상태 확인
-        primary_status = channel_status.get(self.channel_id, {'obss_busy': False, 'intra_busy': False})
+        primary_status = channel_status.get(self.channel_id, {
+            'obss_busy': False, 
+            'intra_busy': False
+        })
         
         if primary_status['intra_busy']:
             # Primary에 intra-BSS 트래픽 발생 - BACKOFF_FROZEN으로 전환
@@ -364,7 +367,6 @@ class STAFiniteStateMachine:
         
         # 2. NPCA target 채널 상태 확인
         if self.npca_transmission_channel is None:
-            # NPCA 채널이 설정되지 않음 - 에러 상황
             self.state = STAState.OBSS_FROZEN
             return self.channel_id
         
@@ -381,56 +383,56 @@ class STAFiniteStateMachine:
         primary_obss_until = obss_occupied_until.get(self.channel_id, current_slot)
         remaining_obss_slots = max(0, primary_obss_until - current_slot)
         
-        if remaining_obss_slots < 2:  # 남은 시간이 너무 적음
+        if remaining_obss_slots < 2:
             self.state = STAState.OBSS_FROZEN
             self._reset_npca_params()
             return self.channel_id
         
-        # 4. 백오프 카운터 진행 (현재 백오프 카운터 사용)
+        # 4. 백오프 카운터 진행
         if self.backoff_counter == 0:
             # 백오프 완료 - NPCA 전송 시도
             self.npca_max_duration = remaining_obss_slots
-            self.state = STAState.TRANSMITTING
+            self.state = STAState.NPCA_TRANSMITTING  # NPCA 전송 상태로!
             self.tx_attempt = True
             self.total_attempts += 1
-            return self.npca_transmission_channel  # NPCA 채널로 전송!
+            return self.npca_transmission_channel
         else:
-            # 백오프 카운터 감소
             self.backoff_counter -= 1
             if self.backoff_counter == 0:
                 # 백오프 완료 - NPCA 전송 시도
                 self.npca_max_duration = remaining_obss_slots
-                self.state = STAState.TRANSMITTING
+                self.state = STAState.NPCA_TRANSMITTING  # NPCA 전송 상태로!
                 self.tx_attempt = True
                 self.total_attempts += 1
-                return self.npca_transmission_channel  # NPCA 채널로 전송!
-            return self.channel_id  # 아직 백오프 중
+                return self.npca_transmission_channel
+            return self.channel_id
     
     def _handle_transmitting(self, current_slot: int):
-        """Handle TRANSMITTING state"""
+        """Handle both PRIMARY_TRANSMITTING and NPCA_TRANSMITTING states"""
         if self.transmitting_until == -1:
             # NPCA 전송인 경우 시간 제한 적용
-            if self.npca_transmission_channel is not None:
+            if self.state == STAState.NPCA_TRANSMITTING and self.npca_max_duration > 0:
                 actual_duration = min(self.current_frame.size, self.npca_max_duration)
                 self.transmitting_until = current_slot + actual_duration
             else:
-                # 일반 전송
+                # Primary 전송
                 self.transmitting_until = current_slot + self.current_frame.size
         
         if current_slot >= self.transmitting_until:
+            # 전송 완료 - 결과는 on_transmission_result에서 처리
             pass
     
     def on_transmission_result(self, result: str, completion_slot: int):
         """Handle transmission result from channel"""
-        if self.state != STAState.TRANSMITTING:
+        if self.state not in [STAState.PRIMARY_TRANSMITTING, STAState.NPCA_TRANSMITTING]:
             return
             
         if result == 'success':
             self.state = STAState.IDLE
             self.successful_transmissions += 1
             
-            # NPCA 성공 통계
-            if self.npca_transmission_channel is not None:
+            # NPCA 성공 통계 (상태로 구분)
+            if self.state == STAState.NPCA_TRANSMITTING:
                 self.npca_successful += 1
                 
             self.last_successful_tx_slot = completion_slot
@@ -838,7 +840,7 @@ class SimplifiedCSMACASimulation:
     
     def get_statistics(self) -> Dict:
         """Get simulation statistics with NPCA metrics"""
-        # 기존 OBSS 통계
+        # Aggregate OBSS generator statistics (활성화된 채널만)
         active_generators = [gen for gen in self.obss_generators if gen is not None]
         
         total_obss_generated = sum(gen.obss_generated for gen in active_generators)
@@ -851,6 +853,12 @@ class SimplifiedCSMACASimulation:
         if active_generators:
             for gen in active_generators:
                 total_obss_duration += gen.obss_generated * np.mean(self.obss_frame_size_range)
+        
+        # NPCA 통계 수집
+        total_npca_attempts = sum(sta.npca_attempts for sta in self.stations)
+        total_npca_successful = sum(sta.npca_successful for sta in self.stations)
+        total_npca_blocked = sum(sta.npca_blocked for sta in self.stations)
+        npca_enabled_stas = sum(1 for sta in self.stations if sta.npca_enabled)
         
         stats = {
             'total_slots': self.current_slot,
@@ -867,10 +875,19 @@ class SimplifiedCSMACASimulation:
             'obss_total_duration_us': int(total_obss_duration * SLOTTIME),
             'obss_channel_utilization': total_obss_duration / (self.current_slot * self.num_channels) if self.current_slot > 0 else 0,
             'mutual_interference_events': total_obss_blocked_by_intra + total_obss_deferred,
+            
+            # NPCA 전체 통계 추가
+            'npca_enabled_stas': npca_enabled_stas,
+            'npca_total_attempts': total_npca_attempts,
+            'npca_total_successful': total_npca_successful,
+            'npca_total_blocked': total_npca_blocked,
+            'npca_success_rate': (total_npca_successful / total_npca_attempts * 100) if total_npca_attempts > 0 else 0,
+            'npca_utilization_rate': (total_npca_attempts / self.current_slot * 100) if self.current_slot > 0 else 0,
+            
             'stations': {}
         }
         
-        # 채널별 OBSS 통계
+        # 채널별 OBSS 통계 (기존)
         stats['obss_per_channel'] = {}
         for ch_id in range(self.num_channels):
             if self.obss_generators[ch_id] is not None:
@@ -891,8 +908,38 @@ class SimplifiedCSMACASimulation:
                     'blocked_by_other_obss': 0
                 }
         
+        # 채널별 NPCA 통계 추가
+        stats['npca_per_channel'] = {}
+        for ch_id in range(self.num_channels):
+            channel_stas = [sta for sta in self.stations if sta.channel_id == ch_id]
+            npca_stas = [sta for sta in channel_stas if sta.npca_enabled]
+            
+            if npca_stas:
+                ch_npca_attempts = sum(sta.npca_attempts for sta in npca_stas)
+                ch_npca_successful = sum(sta.npca_successful for sta in npca_stas)
+                ch_npca_blocked = sum(sta.npca_blocked for sta in npca_stas)
+                
+                stats['npca_per_channel'][ch_id] = {
+                    'enabled': True,
+                    'npca_stas_count': len(npca_stas),
+                    'total_attempts': ch_npca_attempts,
+                    'total_successful': ch_npca_successful,
+                    'total_blocked': ch_npca_blocked,
+                    'success_rate': (ch_npca_successful / ch_npca_attempts * 100) if ch_npca_attempts > 0 else 0
+                }
+            else:
+                stats['npca_per_channel'][ch_id] = {
+                    'enabled': False,
+                    'npca_stas_count': 0,
+                    'total_attempts': 0,
+                    'total_successful': 0,
+                    'total_blocked': 0,
+                    'success_rate': 0
+                }
+        
         # STA별 통계 (NPCA 정보 포함)
         for sta in self.stations:
+            # Calculate average AoI from logs
             avg_aoi_slots = self._calculate_average_aoi(sta.sta_id)
             avg_aoi_time = avg_aoi_slots * SLOTTIME
             
@@ -900,16 +947,20 @@ class SimplifiedCSMACASimulation:
                 'channel': sta.channel_id,
                 'npca_enabled': sta.npca_enabled,  # NPCA 활성화 여부
                 'successful_transmissions': sta.successful_transmissions,
-                'npca_attempts': sta.npca_attempts,  # NPCA 시도 횟수
-                'npca_successful': sta.npca_successful,  # NPCA 성공 횟수
-                'npca_blocked': sta.npca_blocked,  # NPCA 차단 횟수
-                'npca_success_rate': sta.npca_successful / max(1, sta.npca_attempts),  # NPCA 성공률
                 'collisions': sta.collision_count,
                 'total_attempts': sta.total_attempts,
                 'obss_deferrals': sta.obss_deferrals,
                 'intra_bss_deferrals': sta.intra_bss_deferrals,
                 'total_deferrals': sta.obss_deferrals + sta.intra_bss_deferrals,
                 'success_rate': sta.successful_transmissions / max(1, sta.total_attempts),
+                
+                # NPCA 통계 추가
+                'npca_attempts': sta.npca_attempts,
+                'npca_successful': sta.npca_successful,
+                'npca_blocked': sta.npca_blocked,
+                'npca_success_rate': (sta.npca_successful / sta.npca_attempts * 100) if sta.npca_attempts > 0 else 0,
+                'npca_ratio': (sta.npca_successful / sta.successful_transmissions * 100) if sta.successful_transmissions > 0 else 0,
+                
                 'final_state': sta.state.value,
                 'final_backoff_stage': sta.backoff_stage,
                 'average_aoi_slots': avg_aoi_slots,
