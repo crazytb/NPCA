@@ -403,20 +403,44 @@ class SimplifiedCSMACASimulation:
     """Simplified CSMA/CA Network Simulation with mutual OBSS interference"""
     
     def __init__(self, num_channels: int, stas_per_channel: List[int], 
-                 simulation_time: int, frame_size: int, obss_enabled: bool = False,
-                 obss_generation_rate: float = 0.001, obss_frame_size_range: Tuple[int, int] = (20, 50)):
+                 simulation_time: int, frame_size: int, 
+                 obss_enabled_per_channel: List[bool] = None,
+                 npca_enabled: List[bool] = None,  # 새로 추가 - 일단 받기만 함
+                 obss_generation_rate: float = 0.001, 
+                 obss_frame_size_range: Tuple[int, int] = (20, 50)):
+        
         self.num_channels = num_channels
         self.stas_per_channel = stas_per_channel
         self.simulation_time = simulation_time
         self.frame_size = frame_size
-        self.obss_enabled = obss_enabled
+        
+        # 채널별 OBSS 설정 처리
+        if obss_enabled_per_channel is None:
+            self.obss_enabled_per_channel = [False] * num_channels
+        else:
+            assert len(obss_enabled_per_channel) == num_channels, \
+                f"obss_enabled_per_channel length ({len(obss_enabled_per_channel)}) must match num_channels ({num_channels})"
+            self.obss_enabled_per_channel = obss_enabled_per_channel
+        
+        # 채널별 NPCA 설정 처리 (일단 받기만 하고 저장)
+        if npca_enabled is None:
+            self.npca_enabled = [False] * num_channels
+        else:
+            assert len(npca_enabled) == num_channels, \
+                f"npca_enabled length ({len(npca_enabled)}) must match num_channels ({num_channels})"
+            self.npca_enabled = npca_enabled
+        
+        # 전체 OBSS 활성화 여부 (하나라도 True면 True)
+        self.obss_enabled = any(self.obss_enabled_per_channel)
+        
         self.obss_generation_rate = obss_generation_rate
         self.obss_frame_size_range = obss_frame_size_range
         
+        # 나머지는 기존 코드와 동일...
         # Initialize channels
         self.channels = [ChannelFSM(i) for i in range(num_channels)]
         
-        # Initialize stations
+        # Initialize stations (NPCA 기능은 아직 구현 안함)
         self.stations = []
         sta_id = 0
         for ch_id in range(num_channels):
@@ -424,16 +448,18 @@ class SimplifiedCSMACASimulation:
                 self.stations.append(STAFiniteStateMachine(sta_id, ch_id))
                 sta_id += 1
         
-        # Initialize OBSS generators (one per channel)
+        # Initialize OBSS generators (기존과 동일)
         self.obss_generators = []
-        if self.obss_enabled:
-            for ch_id in range(num_channels):
+        for ch_id in range(num_channels):
+            if self.obss_enabled_per_channel[ch_id]:
                 generator = OBSSGenerator(
                     source_channel=ch_id,
                     generation_rate=obss_generation_rate,
                     frame_size_range=obss_frame_size_range
                 )
                 self.obss_generators.append(generator)
+            else:
+                self.obss_generators.append(None)
         
         # Simulation state
         self.current_slot = 0
@@ -465,20 +491,22 @@ class SimplifiedCSMACASimulation:
         if not self.obss_enabled:
             return
         
-        # Generate OBSS traffic for each channel
-        for generator in self.obss_generators:
-            source_ch = generator.source_channel
-            
+        # Generate OBSS traffic for each channel (활성화된 채널만)
+        for ch_id, generator in enumerate(self.obss_generators):
+            # 해당 채널에서 OBSS가 활성화되지 않았으면 스킵
+            if generator is None or not self.obss_enabled_per_channel[ch_id]:
+                continue
+                
             # Check channel status for OBSS generation
-            intra_bss_busy = self.channels[source_ch].is_busy(current_slot)
-            other_obss_busy = self.channels[source_ch].is_obss_busy(current_slot)
+            intra_bss_busy = self.channels[ch_id].is_busy(current_slot)
+            other_obss_busy = self.channels[ch_id].is_obss_busy(current_slot)
             
             # Attempt OBSS generation (with backoff if channel busy)
             obss_traffic = generator.attempt_generation(current_slot, intra_bss_busy, other_obss_busy)
             
             if obss_traffic:
                 # Add OBSS traffic to affected channels
-                affected_channels = self._get_affected_channels(source_ch)
+                affected_channels = self._get_affected_channels(ch_id)
                 for target_ch in affected_channels:
                     if 0 <= target_ch < self.num_channels:
                         self.channels[target_ch].add_obss_traffic(obss_traffic)
@@ -583,22 +611,25 @@ class SimplifiedCSMACASimulation:
     
     def get_statistics(self) -> Dict:
         """Get simulation statistics"""
-        # Aggregate OBSS generator statistics
-        total_obss_generated = sum(gen.obss_generated for gen in self.obss_generators) if self.obss_generators else 0
-        total_obss_deferred = sum(gen.obss_deferred for gen in self.obss_generators) if self.obss_generators else 0
-        total_obss_blocked_by_intra = sum(gen.obss_blocked_by_intra_bss for gen in self.obss_generators) if self.obss_generators else 0
-        total_obss_blocked_by_other_obss = sum(gen.obss_blocked_by_other_obss for gen in self.obss_generators) if self.obss_generators else 0
+        # Aggregate OBSS generator statistics (활성화된 채널만)
+        active_generators = [gen for gen in self.obss_generators if gen is not None]
+        
+        total_obss_generated = sum(gen.obss_generated for gen in active_generators)
+        total_obss_deferred = sum(gen.obss_deferred for gen in active_generators)
+        total_obss_blocked_by_intra = sum(gen.obss_blocked_by_intra_bss for gen in active_generators)
+        total_obss_blocked_by_other_obss = sum(gen.obss_blocked_by_other_obss for gen in active_generators)
         
         # Calculate total OBSS duration
         total_obss_duration = 0
-        if self.obss_generators:
-            for gen in self.obss_generators:
+        if active_generators:
+            for gen in active_generators:
                 total_obss_duration += gen.obss_generated * np.mean(self.obss_frame_size_range)
         
         stats = {
             'total_slots': self.current_slot,
             'total_time_us': self.current_slot * SLOTTIME,
             'obss_enabled': self.obss_enabled,
+            'obss_enabled_per_channel': self.obss_enabled_per_channel,  # 새로 추가
             'obss_generation_rate': self.obss_generation_rate,
             'obss_events_generated': total_obss_generated,
             'obss_events_deferred': total_obss_deferred,
@@ -610,6 +641,27 @@ class SimplifiedCSMACASimulation:
             'mutual_interference_events': total_obss_blocked_by_intra + total_obss_deferred,
             'stations': {}
         }
+        
+        # 채널별 OBSS 통계 추가
+        stats['obss_per_channel'] = {}
+        for ch_id in range(self.num_channels):
+            if self.obss_generators[ch_id] is not None:
+                gen = self.obss_generators[ch_id]
+                stats['obss_per_channel'][ch_id] = {
+                    'enabled': True,
+                    'generated': gen.obss_generated,
+                    'deferred': gen.obss_deferred,
+                    'blocked_by_intra': gen.obss_blocked_by_intra_bss,
+                    'blocked_by_other_obss': gen.obss_blocked_by_other_obss
+                }
+            else:
+                stats['obss_per_channel'][ch_id] = {
+                    'enabled': False,
+                    'generated': 0,
+                    'deferred': 0,
+                    'blocked_by_intra': 0,
+                    'blocked_by_other_obss': 0
+                }
         
         for sta in self.stations:
             # Calculate average AoI from logs
