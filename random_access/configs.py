@@ -28,7 +28,7 @@ simulation_configs = [
     {
         "label": "NPCA Short Frame Duration", 
         "num_channels": 2,
-        "stas_per_channel": [10, 10],
+        "stas_per_channel": [2, 2],
         "simulation_time": simulation_time,
         "frame_size": frame_size,
         "obss_enabled_per_channel": [False, True],  # 채널 1에서만 OBSS 활성화
