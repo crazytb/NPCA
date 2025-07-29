@@ -1,8 +1,9 @@
 # Configuration
 
-simulation_time = 10000  # Total simulation time in us
+simulation_time = 100000  # Total simulation time in us
 simulation_slot = simulation_time // 9  # Slot duration in us (9us for 802.11ax)
 frame_size = 33  # Size of each frame in slots
+stas_per_channel = [10, 10]  # Number of STAs per channel
 
 simulation_configs = [
     # {
@@ -28,7 +29,7 @@ simulation_configs = [
     {
         "label": "NPCA Short Frame Duration", 
         "num_channels": 2,
-        "stas_per_channel": [10, 10],
+        "stas_per_channel": stas_per_channel,
         "simulation_time": simulation_time,
         "frame_size": frame_size,
         "obss_enabled_per_channel": [False, True],  # 채널 1에서만 OBSS 활성화
@@ -38,7 +39,7 @@ simulation_configs = [
     {
         "label": "NPCA Long Frame Duration",
         "num_channels": 2,
-        "stas_per_channel": [10, 10],
+        "stas_per_channel": stas_per_channel,
         "simulation_time": simulation_time,
         "frame_size": frame_size*10,
         "obss_enabled_per_channel": [False, True],  # 채널 1에서만 OBSS 활성화
