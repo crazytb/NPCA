@@ -3,7 +3,7 @@
 simulation_time = 100000  # Total simulation time in us
 simulation_slot = simulation_time // 9  # Slot duration in us (9us for 802.11ax)
 frame_size = 33  # Size of each frame in slots
-stas_per_channel = [10, 10]  # Number of STAs per channel
+stas_per_channel = [2, 2]  # Number of STAs per channel
 
 simulation_configs = [
     # {
