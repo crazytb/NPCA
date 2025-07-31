@@ -25,7 +25,7 @@ def run_obss_comparison(simulation_configs):
         df = sim.run()
 
         # Save the full DataFrame for detailed analysis
-        df.to_csv(f"obss_simulation_{config['label'].replace(' ', '_').lower()}.csv", index=False)
+        df.to_csv(f"csv/obss_simulation_{config['label'].replace(' ', '_').lower()}.csv", index=False)
 
         # Save simplified version of the DataFrame for easier access
         simplified_columns = [
@@ -33,7 +33,7 @@ def run_obss_comparison(simulation_configs):
             'channel_0_occupied_until', 'channel_0_obss_occupied_until', 'states_ch_0', 'backoff_ch_0',
             'channel_1_occupied_until', 'channel_1_obss_occupied_until', 'states_ch_1', 'backoff_ch_1'
         ]
-        df[simplified_columns].to_csv(f"obss_simulation_{config['label'].replace(' ', '_').lower()}_simplified.csv", index=False)
+        df[simplified_columns].to_csv(f"csv/obss_simulation_{config['label'].replace(' ', '_').lower()}_simplified.csv", index=False)
 
         stats = sim.get_statistics()
         
@@ -272,7 +272,7 @@ def plot_obss_comparison(results):
     ax4.grid(True, alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig('figure/obss_npca_comparison.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'figure/obss_npca_comparison_{config["label"]}.png', dpi=300, bbox_inches='tight')
     # plt.show()
 
 def plot_channel_specific_obss_impact(results):
@@ -479,7 +479,7 @@ def plot_channel_specific_obss_impact(results):
                             #   bbox=dict(boxstyle="round,pad=0.3", facecolor="yellow", alpha=0.7))
     
     plt.tight_layout()
-    plt.savefig('figure/obss_npca_channel_impact.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'figure/obss_npca_channel_impact_{config["label"]}.png', dpi=300, bbox_inches='tight')
     # plt.show()
 
 def plot_fsm_states_analysis(results):
@@ -626,7 +626,7 @@ def plot_fsm_states_analysis(results):
     
     plt.tight_layout()
     plt.subplots_adjust(right=0.85)  # Make room for legend
-    plt.savefig('figure/obss_npca_fsm_states_detailed.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'figure/obss_npca_fsm_states_detailed_{config["label"]}.png', dpi=300, bbox_inches='tight')
     # plt.show()
 
 def plot_obss_deferrals_analysis(results):
@@ -866,7 +866,7 @@ def plot_obss_deferrals_analysis(results):
             bbox=dict(boxstyle="round,pad=0.3", facecolor="yellow", alpha=0.7))
     
     plt.tight_layout()
-    plt.savefig('figure/obss_deferrals_npca_analysis.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'figure/obss_deferrals_npca_analysis_{config["label"]}.png', dpi=300, bbox_inches='tight')
     # plt.show()
 
 def plot_mutual_interference_analysis(results):
@@ -1067,7 +1067,7 @@ def plot_mutual_interference_analysis(results):
                     fontsize=8, style='italic')
     
     plt.tight_layout()
-    plt.savefig('figure/mutual_interference_npca_analysis.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'figure/mutual_interference_npca_analysis_{config["label"]}.png', dpi=300, bbox_inches='tight')
     # plt.show()
 
 def plot_channel_fairness_analysis(results):
@@ -1356,7 +1356,7 @@ def plot_channel_fairness_analysis(results):
             bbox=dict(boxstyle="round,pad=0.3", facecolor="yellow", alpha=0.7))
     
     plt.tight_layout()
-    plt.savefig('figure/channel_fairness_npca_analysis.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'figure/channel_fairness_npca_analysis_{config["label"]}.png', dpi=300, bbox_inches='tight')
     # plt.show()
 
 def plot_npca_cross_channel_impact(results):
@@ -1587,7 +1587,7 @@ def plot_npca_cross_channel_impact(results):
             bbox=dict(boxstyle="round,pad=0.3", facecolor="yellow", alpha=0.7))
     
     plt.tight_layout()
-    plt.savefig('figure/npca_cross_channel_impact.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'figure/npca_cross_channel_impact_{config["label"]}.png', dpi=300, bbox_inches='tight')
     # plt.show()
 
 # Print function was already provided in the previous response, so keeping it as is
