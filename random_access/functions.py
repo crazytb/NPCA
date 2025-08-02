@@ -25,7 +25,7 @@ def run_obss_comparison(simulation_configs):
         df = sim.run()
 
         # Save the full DataFrame for detailed analysis
-        df.to_csv(f"csv/obss_simulation_{config['label'].replace(' ', '_').lower()}.csv", index=False)
+        # df.to_csv(f"csv/obss_simulation_{config['label'].replace(' ', '_').lower()}.csv", index=False)
 
         # Save simplified version of the DataFrame for easier access
         simplified_columns = [
@@ -33,17 +33,18 @@ def run_obss_comparison(simulation_configs):
             'channel_0_occupied_until', 'channel_0_obss_occupied_until', 'states_ch_0', 'backoff_ch_0',
             'channel_1_occupied_until', 'channel_1_obss_occupied_until', 'states_ch_1', 'backoff_ch_1'
         ]
-        # df[simplified_columns].to_csv(f"csv/obss_simulation_{config['label'].replace(' ', '_').lower()}_simplified.csv", index=False)
+        df[simplified_columns].to_csv(f"csv/obss_simulation_{config['label'].replace(' ', '_').lower()}_simplified.csv", index=False)
 
-        stats = sim.get_statistics()
+        # stats = sim.get_statistics()
         
-        results[config['label']] = {
-            'config': config,
-            'stats': stats,
-            'dataframe': df
-        }
-    
-    return results
+        # results[config['label']] = {
+        #     'config': config,
+        #     'stats': stats,
+        #     'dataframe': df
+        # }
+        del df
+
+    # return results
 
 def plot_obss_comparison(results):
     """Create OBSS and NPCA comparison plots with channel-specific analysis"""

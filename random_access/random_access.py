@@ -956,6 +956,7 @@ class SimplifiedCSMACASimulation:
     def run(self) -> pd.DataFrame:
         """Run the simulation"""
         for self.current_slot in range(self.simulation_time):
+            # print(f"Slot: {self.current_slot}/{self.simulation_time - 1}")
             self._tick()
         
         return pd.DataFrame(self.logs)
