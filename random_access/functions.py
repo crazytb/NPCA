@@ -33,7 +33,7 @@ def run_obss_comparison(simulation_configs):
             'channel_0_occupied_until', 'channel_0_obss_occupied_until', 'states_ch_0', 'backoff_ch_0',
             'channel_1_occupied_until', 'channel_1_obss_occupied_until', 'states_ch_1', 'backoff_ch_1'
         ]
-        df[simplified_columns].to_csv(f"csv/obss_simulation_{config['label'].replace(' ', '_').lower()}_simplified.csv", index=False)
+        # df[simplified_columns].to_csv(f"csv/obss_simulation_{config['label'].replace(' ', '_').lower()}_simplified.csv", index=False)
 
         stats = sim.get_statistics()
         
