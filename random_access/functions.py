@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from random_access.random_access import SimplifiedCSMACASimulation, SLOTTIME
 from random_access.configs import *
 
-def run_obss_comparison(simulation_configs):
+def run_obss_comparison(simulation_configs, saveformat="csv"):
     """Run simulations comparing OBSS enabled vs disabled with channel-specific settings"""
     
     results = {}
@@ -19,7 +19,8 @@ def run_obss_comparison(simulation_configs):
             frame_size=config["frame_size"],
             obss_enabled_per_channel=config["obss_enabled_per_channel"],
             npca_enabled=config.get("npca_enabled", None),  # 새로 추가 - 없으면 None
-            obss_generation_rate=config["obss_generation_rate"]
+            obss_generation_rate=config["obss_generation_rate"],
+            obss_frame_size_range=config["obss_frame_size_range"]
         )
         
         df = sim.run()
@@ -31,9 +32,14 @@ def run_obss_comparison(simulation_configs):
         simplified_columns = [
             'time', 'slot',
             'channel_0_occupied_until', 'channel_0_obss_occupied_until', 'states_ch_0', 'backoff_ch_0',
-            'channel_1_occupied_until', 'channel_1_obss_occupied_until', 'states_ch_1', 'backoff_ch_1'
+            'channel_1_occupied_until', 'channel_1_obss_occupied_until', 'states_ch_1', 'backoff_ch_1',
+            'npca_attempts_ch_1', 'npca_successful_ch_1', 'npca_blocked_ch_1', 'npca_enabled_ch_1',
         ]
-        df[simplified_columns].to_csv(f"csv/obss_simulation_{config['label'].replace(' ', '_').lower()}_simplified.csv", index=False)
+        
+        if saveformat == "csv":
+            df[simplified_columns].to_csv(f"csv/obss_simulation_{config['label'].replace(' ', '_').lower()}_simplified.csv", index=False)
+        elif saveformat == "pickle":
+            df[simplified_columns].to_pickle(f"pickle/obss_simulation_{config['label'].replace(' ', '_').lower()}.pkl")
 
         # stats = sim.get_statistics()
         

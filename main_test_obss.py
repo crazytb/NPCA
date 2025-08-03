@@ -4,7 +4,7 @@ from random_access.configs import simulation_configs
 if __name__ == "__main__":
     # Run OBSS comparison simulations
     print("Starting mutual OBSS interference simulations...")  # ✨ 제목 수정
-    results = run_obss_comparison(simulation_configs)
+    results = run_obss_comparison(simulation_configs, saveformat="pickle")
     
     # # Generate visualizations
     # print("\nGenerating OBSS comparison plots...")
