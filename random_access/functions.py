@@ -31,8 +31,8 @@ def run_obss_comparison(simulation_configs, saveformat="csv"):
         # Save simplified version of the DataFrame for easier access
         simplified_columns = [
             'time', 'slot',
-            'channel_0_occupied_until', 'channel_0_obss_occupied_until', 'states_ch_0', 'backoff_ch_0',
-            'channel_1_occupied_until', 'channel_1_obss_occupied_until', 'states_ch_1', 'backoff_ch_1',
+            'channel_0_occupied_remained', 'channel_0_obss_occupied_remained', 'states_ch_0', 'backoff_ch_0',
+            'channel_1_occupied_remained', 'channel_1_obss_occupied_remained', 'states_ch_1', 'backoff_ch_1',
             'npca_attempts_ch_1', 'npca_successful_ch_1', 'npca_blocked_ch_1', 'npca_enabled_ch_1',
         ]
         
