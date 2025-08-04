@@ -2,6 +2,9 @@ from random_access.functions import *
 from random_access.configs import simulation_configs
 
 if __name__ == "__main__":
+    # Fix random seed for reproducibility
+    np.random.seed(42)
+    
     # Run OBSS comparison simulations
     print("Starting mutual OBSS interference simulations...")  # ✨ 제목 수정
     results = run_obss_comparison(simulation_configs, saveformat="pickle")

@@ -197,7 +197,7 @@ class STAFiniteStateMachine:
         self.tx_queue.append(frame)
         self.has_frame_to_send = True
     
-    def update(self, current_slot: int, channel_status: Dict[int, Dict], obss_occupied_until: Dict[int, int]) -> Tuple[bool, int]:
+    def update(self, current_slot: int, channel_status: Dict[int, Dict], obss_occupied_remained: Dict[int, int]) -> Tuple[bool, int]:
         """Update FSM state - 기본 정지 원칙 + NPCA 예외 조건"""
         
         self.tx_attempt = False
@@ -215,8 +215,8 @@ class STAFiniteStateMachine:
             'any_busy': False
         })
         
-        primary_intra_busy = primary_status['intra_busy']  # occupied_until > 0
-        primary_obss_busy = primary_status['obss_busy']    # obss_occupied_until > 0
+        primary_intra_busy = primary_status['intra_busy']  # occupied_remained > 0
+        primary_obss_busy = primary_status['obss_busy']    # obss_occupied_remained > 0
         primary_any_busy = primary_intra_busy or primary_obss_busy
         
         # 지연 통계 카운팅
@@ -234,23 +234,23 @@ class STAFiniteStateMachine:
         elif self.state == STAState.BACKOFF:
             target_channel = self._handle_backoff_with_npca_exception(
                 primary_intra_busy, primary_obss_busy, primary_any_busy,
-                current_slot, channel_status, obss_occupied_until)
+                current_slot, channel_status, obss_occupied_remained)
             
         elif self.state == STAState.BACKOFF_FROZEN:
             self._handle_backoff_frozen_with_npca_exception(
                 primary_intra_busy, primary_obss_busy, primary_any_busy,
-                current_slot, channel_status, obss_occupied_until)
+                current_slot, channel_status, obss_occupied_remained)
             
         elif self.state == STAState.OBSS_FROZEN:
             target_channel = self._handle_obss_frozen_corrected(
                 primary_intra_busy, primary_obss_busy, 
-                current_slot, channel_status, obss_occupied_until)
+                current_slot, channel_status, obss_occupied_remained)
             
         elif self.state == STAState.NPCA_BACKOFF:
-            target_channel = self._handle_npca_backoff(current_slot, channel_status, obss_occupied_until)
+            target_channel = self._handle_npca_backoff(current_slot, channel_status, obss_occupied_remained)
             
         elif self.state == STAState.NPCA_BACKOFF_FROZEN:  # ✅ 새로 추가
-            target_channel = self._handle_npca_backoff_frozen(current_slot, channel_status, obss_occupied_until)
+            target_channel = self._handle_npca_backoff_frozen(current_slot, channel_status, obss_occupied_remained)
             
         elif self.state in [STAState.PRIMARY_TRANSMITTING, STAState.NPCA_TRANSMITTING]:
             self._handle_transmitting(current_slot)
@@ -259,15 +259,15 @@ class STAFiniteStateMachine:
     
     # def _handle_backoff_with_npca_exception(self, primary_intra_busy: bool, primary_obss_busy: bool, 
     #                                    primary_any_busy: bool, current_slot: int,
-    #                                    channel_status: Dict[int, Dict], obss_occupied_until: Dict[int, int]) -> int:
+    #                                    channel_status: Dict[int, Dict], obss_occupied_remained: Dict[int, int]) -> int:
     #     """Handle BACKOFF state - 기본 정지 원칙 + NPCA 예외"""
         
     #     # ✨ 기본 원칙: Primary 채널이 busy하면 무조건 정지
     #     if primary_any_busy:
     #         # NPCA 예외 조건 확인
     #         if (self.npca_enabled and 
-    #             not primary_intra_busy and     # occupied_until = 0
-    #             primary_obss_busy and          # obss_occupied_until > 0  
+    #             not primary_intra_busy and     # occupied_remained = 0
+    #             primary_obss_busy and          # obss_occupied_remained > 0  
     #             self._has_idle_target_channel(channel_status)):  # 타겟 채널 idle
                 
     #             # NPCA 예외 조건 만족 → OBSS_FROZEN으로 전환 (NPCA 시도)
@@ -290,8 +290,8 @@ class STAFiniteStateMachine:
             # NPCA 예외 조건 확인
             if (self.npca_enabled and 
                 not primary_intra_busy and 
-                primary_obss_busy and 
-                self._has_idle_target_channel(channel_status)):
+                primary_obss_busy):
+                # self._has_idle_target_channel(channel_status)
                 
                 # ✅ 직접 NPCA 설정 및 NPCA_BACKOFF로 전환
                 return self._setup_npca_and_backoff(current_slot, channel_status, obss_occupied_until)
@@ -318,14 +318,14 @@ class STAFiniteStateMachine:
         # 2. 타겟 채널 선택
         available_npca_channels = []
         for target_ch in self.npca_target_channels:
-            target_status = channel_status.get(target_ch, {'any_busy': True})
-            if not target_status['any_busy']:
-                available_npca_channels.append(target_ch)
+            # target_status = channel_status.get(target_ch, {'any_busy': True})
+            # if not target_status['any_busy']:
+            available_npca_channels.append(target_ch)
         
-        if not available_npca_channels:
-            self.npca_blocked += 1
-            self.state = STAState.BACKOFF_FROZEN
-            return self.channel_id
+        # if available_npca_channels == []:
+        #     self.npca_blocked += 1
+        #     self.state = STAState.BACKOFF_FROZEN
+        #     return self.channel_id
         
         # 3. NPCA 파라미터 설정
         selected_npca_channel = available_npca_channels[0]
@@ -340,7 +340,7 @@ class STAFiniteStateMachine:
 
     def _handle_backoff_frozen_with_npca_exception(self, primary_intra_busy: bool, primary_obss_busy: bool,
                                               primary_any_busy: bool, current_slot: int,
-                                              channel_status: Dict[int, Dict], obss_occupied_until: Dict[int, int]):
+                                              channel_status: Dict[int, Dict], obss_occupied_remained: Dict[int, int]):
         """Handle BACKOFF_FROZEN state - NPCA 예외 조건 재확인"""
         
         if not primary_any_busy:
@@ -350,8 +350,8 @@ class STAFiniteStateMachine:
         
         # Primary 채널이 여전히 busy
         if (self.npca_enabled and 
-            not primary_intra_busy and     # occupied_until = 0
-            primary_obss_busy and          # obss_occupied_until > 0
+            not primary_intra_busy and     # occupied_remained = 0
+            primary_obss_busy and          # obss_occupied_remained > 0
             self._has_idle_target_channel(channel_status)):  # 타겟 채널 idle
             
             # NPCA 예외 조건 만족 → OBSS_FROZEN으로 전환
@@ -383,17 +383,17 @@ class STAFiniteStateMachine:
                 self.state = STAState.PRIMARY_TRANSMITTING
                 self.tx_attempt = True
                 self.total_attempts += 1
-            else:
-                self.backoff_counter -= 1
-                if self.backoff_counter == 0:
-                    # Primary 채널에서 전송
-                    self.state = STAState.PRIMARY_TRANSMITTING
-                    self.tx_attempt = True
-                    self.total_attempts += 1
+            # else:
+            #     self.backoff_counter -= 1
+            #     if self.backoff_counter == 0:
+            #         # Primary 채널에서 전송
+            #         self.state = STAState.PRIMARY_TRANSMITTING
+            #         self.tx_attempt = True
+            #         self.total_attempts += 1
     
     def _handle_backoff_corrected(self, primary_intra_busy: bool, primary_obss_busy: bool, 
                             current_slot: int, channel_status: Dict[int, Dict], 
-                            obss_occupied_until: Dict[int, int]):
+                            obss_occupied_remained: Dict[int, int]):
         """Handle BACKOFF state - Primary 채널 상태 우선"""
         
         if primary_intra_busy:
@@ -460,7 +460,7 @@ class STAFiniteStateMachine:
     
     
     def _handle_obss_frozen(self, channel_busy: bool, obss_busy: bool, current_slot: int,
-                            channel_status: Dict[int, Dict], obss_occupied_until: Dict[int, int]) -> int:
+                            channel_status: Dict[int, Dict], obss_occupied_remained: Dict[int, int]) -> int:
         """Handle OBSS_FROZEN state - NPCA 시도 로직"""
         if channel_busy:
             # Intra-BSS 트래픽이 나타나면 BACKOFF_FROZEN으로 전환
@@ -475,12 +475,12 @@ class STAFiniteStateMachine:
             
             # ✨ 추가: NPCA 활성화 조건 체크
             if self.npca_enabled and self.npca_target_channels and self._should_activate_npca(channel_status):
-                return self._attempt_npca(current_slot, channel_status, obss_occupied_until)
+                return self._attempt_npca(current_slot, channel_status, obss_occupied_remained)
             return self.channel_id
         
     def _handle_obss_frozen_corrected(self, primary_intra_busy: bool, primary_obss_busy: bool,
                                 current_slot: int, channel_status: Dict[int, Dict], 
-                                obss_occupied_until: Dict[int, int]) -> int:
+                                obss_occupied_remained: Dict[int, int]) -> int:
         """Handle OBSS_FROZEN state - NPCA 시도 전용 상태"""
         
         if primary_intra_busy:
@@ -496,14 +496,14 @@ class STAFiniteStateMachine:
         else:
             # Primary에 OBSS만 있는 상황 → NPCA 시도
             if self._should_attempt_npca(channel_status):
-                return self._attempt_npca(current_slot, channel_status, obss_occupied_until)
+                return self._attempt_npca(current_slot, channel_status, obss_occupied_remained)
             else:
                 # NPCA 조건 불충족 → 일반 백오프로 복귀 (OBSS 무시)
                 self.state = STAState.BACKOFF
                 return self.channel_id
     
     def _attempt_npca(self, current_slot: int, channel_status: Dict[int, Dict], 
-                      obss_occupied_until: Dict[int, int]) -> int:
+                      obss_occupied_remained: Dict[int, int]) -> int:
         """NPCA 시도 로직 - 엄격한 조건 재확인"""
         
         # 1. NPCA 조건 재확인
@@ -512,7 +512,7 @@ class STAFiniteStateMachine:
             return self.channel_id
         
         # 2. Primary 채널의 OBSS 지속 시간 확인
-        primary_obss_until = obss_occupied_until.get(self.channel_id, current_slot)
+        primary_obss_until = obss_occupied_remained.get(self.channel_id, current_slot)
         remaining_obss_slots = max(0, primary_obss_until - current_slot)
         
         min_npca_duration = 5  # 최소 5슬롯 이상 남아있어야 NPCA 시도
@@ -587,7 +587,7 @@ class STAFiniteStateMachine:
         return self.npca_enabled and len(self.npca_target_channels) > 0
     
     def _handle_npca_backoff(self, current_slot: int, channel_status: Dict[int, Dict], 
-                        obss_occupied_until: Dict[int, int]) -> int:
+                        obss_occupied_remained: Dict[int, int]) -> int:
         """Handle NPCA_BACKOFF state with freeze mechanism"""
         
         # 1. Primary 채널의 OBSS 상태 확인 (NPCA 유지 조건)
@@ -621,7 +621,7 @@ class STAFiniteStateMachine:
             return self.channel_id
         
         # 3. NPCA 전송 가능 시간 재확인
-        primary_obss_until = obss_occupied_until.get(self.channel_id, current_slot)
+        primary_obss_until = obss_occupied_remained.get(self.channel_id, current_slot)
         remaining_obss_slots = max(0, primary_obss_until - current_slot)
         
         if remaining_obss_slots < 2:
@@ -651,7 +651,7 @@ class STAFiniteStateMachine:
             return self.channel_id
     
     def _handle_npca_backoff_frozen(self, current_slot: int, channel_status: Dict[int, Dict], 
-                                obss_occupied_until: Dict[int, int]) -> int:
+                                obss_occupied_remained: Dict[int, int]) -> int:
         """Handle NPCA_BACKOFF_FROZEN state"""
         
         # 1. Primary 채널의 OBSS 상태 확인 (NPCA 유지 조건)
@@ -682,7 +682,7 @@ class STAFiniteStateMachine:
         # ✅ NPCA 채널이 idle해지면 NPCA_BACKOFF로 복귀 (백오프 재개)
         if not target_status['any_busy']:
             # NPCA 전송 가능 시간 재확인
-            primary_obss_until = obss_occupied_until.get(self.channel_id, current_slot)
+            primary_obss_until = obss_occupied_remained.get(self.channel_id, current_slot)
             remaining_obss_slots = max(0, primary_obss_until - current_slot)
             
             if remaining_obss_slots >= 2:
@@ -764,15 +764,16 @@ class STAFiniteStateMachine:
         
     def _has_idle_target_channel(self, channel_status: Dict[int, Dict]) -> bool:
         """타겟 채널 중 idle한 채널이 있는지 확인"""
-        if not self.npca_enabled or not self.npca_target_channels:
-            return False
+        # if not self.npca_enabled or not self.npca_target_channels:
+        #     return False
         
-        for target_ch in self.npca_target_channels:
-            target_status = channel_status.get(target_ch, {'any_busy': True})
-            if not target_status['any_busy']:  # 타겟 채널이 완전히 idle
-                return True
-        
-        return False
+        # for target_ch in self.npca_target_channels:
+        #     target_status = channel_status.get(target_ch, {'any_busy': True})
+        #     if not target_status['any_busy']:  # 타겟 채널이 완전히 idle
+        #         return True
+        #
+        # return False
+        return True # 무조건 이동해야 함. busy라면 NPCA에서 frozen.
     
     def _continue_backoff(self):
         """백오프 카운터 감소 및 전송 시도"""
@@ -793,7 +794,7 @@ class STAFiniteStateMachine:
 
     def _handle_obss_frozen_corrected(self, primary_intra_busy: bool, primary_obss_busy: bool,
                                     current_slot: int, channel_status: Dict[int, Dict], 
-                                    obss_occupied_until: Dict[int, int]) -> int:
+                                    obss_occupied_remained: Dict[int, int]) -> int:
         """Handle OBSS_FROZEN state - NPCA 시도 전용"""
         
         if primary_intra_busy:
@@ -809,14 +810,14 @@ class STAFiniteStateMachine:
         else:
             # Primary에 OBSS만 있는 상황 → NPCA 시도
             if self._has_idle_target_channel(channel_status):
-                return self._attempt_npca(current_slot, channel_status, obss_occupied_until)
+                return self._attempt_npca(current_slot, channel_status, obss_occupied_remained)
             else:
                 # 타겟 채널도 모두 busy → BACKOFF_FROZEN으로 전환
                 self.state = STAState.BACKOFF_FROZEN
                 return self.channel_id
 
     def _attempt_npca(self, current_slot: int, channel_status: Dict[int, Dict], 
-                    obss_occupied_until: Dict[int, int]) -> int:
+                    obss_occupied_remained: Dict[int, int]) -> int:
         """NPCA 시도 로직"""
         
         # 1. NPCA 조건 재확인
@@ -825,7 +826,7 @@ class STAFiniteStateMachine:
             return self.channel_id
         
         # 2. Primary 채널의 OBSS 지속 시간 확인
-        primary_obss_until = obss_occupied_until.get(self.channel_id, current_slot)
+        primary_obss_until = obss_occupied_remained.get(self.channel_id, current_slot)
         remaining_obss_slots = max(0, primary_obss_until - current_slot)
         
         min_npca_duration = 5  # 최소 5슬롯 이상 남아있어야 NPCA 시도
@@ -860,7 +861,7 @@ class ChannelFSM:
     def __init__(self, channel_id: int):
         self.channel_id = channel_id
         self.transmitting_stations = []
-        self.occupied_until = -1
+        self.occupied_remained = -1
         self.current_frame = None
         self.pending_results = []  # Store pending transmission results
         
@@ -876,13 +877,13 @@ class ChannelFSM:
         self._update_obss_traffic(current_slot)
         
         # Check if transmission completed
-        if current_slot >= self.occupied_until and self.occupied_until != -1:
+        if current_slot >= self.occupied_remained and self.occupied_remained != -1:
             # Transmission completed - return results with completion slot
             results = [(sta_id, result, current_slot) for sta_id, result in self.pending_results]
             self.pending_results.clear()
             self.transmitting_stations.clear()
             self.current_frame = None
-            self.occupied_until = -1
+            self.occupied_remained = -1
         
         return results
     
@@ -915,26 +916,26 @@ class ChannelFSM:
             return
         
         # Only process if channel is not already occupied by intra-BSS traffic
-        if current_slot >= self.occupied_until:
+        if current_slot >= self.occupied_remained:
             if len(self.transmitting_stations) == 1:
                 # Single transmission - will be successful
                 sta_id, frame = self.transmitting_stations[0]
                 self.pending_results.append((sta_id, 'success'))
-                self.occupied_until = current_slot + frame.size
+                self.occupied_remained = current_slot + frame.size
                 self.current_frame = frame
             else:
                 # Multiple transmissions - collision
                 max_duration = max(frame.size for _, frame in self.transmitting_stations)
                 for sta_id, frame in self.transmitting_stations:
                     self.pending_results.append((sta_id, 'collision'))
-                self.occupied_until = current_slot + max_duration
+                self.occupied_remained = current_slot + max_duration
         
         # Clear transmission attempts after resolving
         self.transmitting_stations.clear()
     
     def is_busy(self, current_slot: int) -> bool:
         """Check if channel is busy due to intra-BSS traffic"""
-        return current_slot < self.occupied_until
+        return current_slot < self.occupied_remained
     
     def is_obss_busy(self, current_slot: int) -> bool:
         """Check if channel is busy due to OBSS traffic"""
@@ -1098,7 +1099,7 @@ class SimplifiedCSMACASimulation:
         
         # 임시 채널 상태 (NPCA 전송 반영 전)
         temp_channel_status = {}
-        temp_obss_occupied_until = {}
+        temp_obss_occupied_remained = {}
         
         for ch_id in range(self.num_channels):
             channel = self.channels[ch_id]
@@ -1107,11 +1108,11 @@ class SimplifiedCSMACASimulation:
                 'obss_busy': channel.is_obss_busy(self.current_slot),
                 'any_busy': channel.is_any_busy(self.current_slot)
             }
-            temp_obss_occupied_until[ch_id] = channel.obss_occupied_until
+            temp_obss_occupied_remained[ch_id] = channel.obss_occupied_until
         
         # STA 업데이트 (NPCA 전송 반영 전 상태 기준)
         for sta in self.stations:
-            tx_attempt, target_channel = sta.update(self.current_slot, temp_channel_status, temp_obss_occupied_until)
+            tx_attempt, target_channel = sta.update(self.current_slot, temp_channel_status, temp_obss_occupied_remained)
             
             if tx_attempt and sta.current_frame:
                 if target_channel != sta.channel_id:
@@ -1146,7 +1147,7 @@ class SimplifiedCSMACASimulation:
         # ✨ 3단계: 업데이트된 채널 상태로 다른 STA들 재평가
         # NPCA 전송으로 인해 원래 채널이 busy해진 상태 반영
         final_channel_status = {}
-        final_obss_occupied_until = {}
+        final_obss_occupied_remained = {}
         
         for ch_id in range(self.num_channels):
             channel = self.channels[ch_id]
@@ -1155,7 +1156,7 @@ class SimplifiedCSMACASimulation:
                 'obss_busy': channel.is_obss_busy(self.current_slot),
                 'any_busy': channel.is_any_busy(self.current_slot)
             }
-            final_obss_occupied_until[ch_id] = channel.obss_occupied_until
+            final_obss_occupied_remained[ch_id] = channel.obss_occupied_until
         
         # NPCA 전송하지 않는 STA들의 상태 재조정
         for sta in self.stations:
@@ -1164,16 +1165,16 @@ class SimplifiedCSMACASimulation:
                 continue
                 
             # 다른 STA들은 업데이트된 채널 상태에 따라 상태 조정
-            if sta.state in [STAState.BACKOFF, STAState.NPCA_BACKOFF, STAState.OBSS_FROZEN]:
-                primary_status = final_channel_status[sta.channel_id]
+            # if sta.state in [STAState.BACKOFF, STAState.NPCA_BACKOFF, STAState.OBSS_FROZEN]:
+            #     primary_status = final_channel_status[sta.channel_id]
                 
-                if primary_status['any_busy']:
-                    # 채널이 busy해짐 (NPCA 전송 포함) → frozen 상태로
-                    if primary_status['intra_busy']:
-                        sta.state = STAState.BACKOFF_FROZEN
-                    else:
-                        # OBSS만 있는 경우 (NPCA 전송 포함)
-                        sta.state = STAState.BACKOFF_FROZEN  # 단순화: OBSS든 NPCA든 정지
+            #     if primary_status['any_busy']:
+            #         # 채널이 busy해짐 (NPCA 전송 포함) → frozen 상태로
+            #         if primary_status['intra_busy']:
+            #             sta.state = STAState.BACKOFF_FROZEN
+            #         else:
+            #             # OBSS만 있는 경우 (NPCA 전송 포함)
+            #             sta.state = STAState.BACKOFF_FROZEN  # 단순화: OBSS든 NPCA든 정지
         
         # ✨ 4단계: 일반 전송들을 채널에 추가
         for sta, target_channel in transmission_attempts:
@@ -1264,6 +1265,22 @@ class SimplifiedCSMACASimulation:
             )
             
             self.channels[npca_sta.channel_id].add_obss_traffic(source_obss)
+
+    def _add_npca_to_target_channel(self, npca_sta: STAFiniteStateMachine, target_channel: int):
+        """NPCA 전송 시 target 채널에도 OBSS 트래픽 추가"""
+        if npca_sta.current_frame and npca_sta.npca_max_duration > 0:
+            actual_duration = min(npca_sta.current_frame.size, npca_sta.npca_max_duration)
+
+            target_obss = OBSSTraffic(
+                obss_id=f"npca_target_{npca_sta.sta_id}_{self.current_slot}",
+                start_slot=self.current_slot,
+                duration=actual_duration,
+                source_channel=target_channel
+            )
+
+            self.channels[target_channel].add_obss_traffic(target_obss)
+
+
     
     def _generate_new_frame(self, sta: STAFiniteStateMachine, creation_slot: int):
         """Generate new frame for station after successful transmission"""
@@ -1291,10 +1308,10 @@ class SimplifiedCSMACASimulation:
             log_entry[f'channel_{ch_id}_any_busy'] = channel.is_any_busy(self.current_slot)
             
             # Show remaining occupation time
-            remaining_slots = max(0, channel.occupied_until - self.current_slot)
+            remaining_slots = max(0, channel.occupied_remained - self.current_slot)
             obss_remaining_slots = max(0, channel.obss_occupied_until - self.current_slot)
-            log_entry[f'channel_{ch_id}_occupied_until'] = remaining_slots
-            log_entry[f'channel_{ch_id}_obss_occupied_until'] = obss_remaining_slots
+            log_entry[f'channel_{ch_id}_occupied_remained'] = remaining_slots
+            log_entry[f'channel_{ch_id}_obss_occupied_remained'] = obss_remaining_slots
             
             # Count active OBSS traffic
             log_entry[f'channel_{ch_id}_active_obss_count'] = len(channel.obss_traffic)
