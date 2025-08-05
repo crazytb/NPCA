@@ -72,7 +72,11 @@ class Channel:
     
     def generate_obss(self, slot: int):
         """빈 채널일 때 확률적으로 OBSS 트래픽을 생성"""
-        if self.current_occupancy is None and random.random() < self.obss_generation_rate:
+        if (
+            self.current_occupancy is None and
+            not self.is_busy_by_obss(slot) and
+            random.random() < self.obss_generation_rate
+            ):
             duration = random.randint(*self.obss_duration_range)
             obss = OBSSTraffic(
                 obss_id=f"obss_{self.channel_id}_{slot}",
@@ -118,16 +122,31 @@ class STA:
             self._handle_npca_tx(slot)
 
     def _handle_primary_backoff(self, slot: int):
+        # (1) NPCA OFF인 경우: 어떤 busy든 무조건 frozen
+        if not self.npca_enabled:
+            if self.primary_channel.is_busy(slot):
+                self.state = STAState.PRIMARY_FROZEN
+            elif self.backoff == 0:
+                self.tx_remaining = self.get_tx_duration()
+                self.primary_channel.occupy(slot, self.tx_remaining, self.sta_id)
+                self.state = STAState.PRIMARY_TX
+            else:
+                self.backoff -= 1
+            return  # 종료
+
+        # (2) NPCA ON인 경우
         if self.primary_channel.is_busy_by_intra_bss(self.channel_id, slot):
             self.state = STAState.PRIMARY_FROZEN
+
         elif self.primary_channel.is_busy_by_obss(slot):
-            if self.npca_enabled and self.npca_channel:
+            if self.npca_channel:
                 self.current_obss = self.primary_channel.get_latest_obss(slot)
                 self.backoff = self.generate_backoff()
                 if self.npca_channel.is_busy(slot):
                     self.state = STAState.NPCA_FROZEN
                 else:
                     self.state = STAState.NPCA_BACKOFF
+
         elif not self.primary_channel.is_busy(slot):
             if self.backoff == 0:
                 self.tx_remaining = self.get_tx_duration()
@@ -135,6 +154,7 @@ class STA:
                 self.state = STAState.PRIMARY_TX
             else:
                 self.backoff -= 1
+
 
     def _handle_primary_tx(self, slot: int):
         if self.tx_remaining > 0:
@@ -144,20 +164,32 @@ class STA:
             self.backoff = self.generate_backoff()
 
     def _handle_npca_backoff(self, slot: int):
-        if self.npca_channel.is_busy(slot):
+        if self.npca_channel.is_busy_by_intra_bss(self.channel_id, slot):
             self.state = STAState.NPCA_FROZEN
         elif self.backoff > 0:
             self.backoff -= 1
         else:
             remaining = self.current_obss.end_slot - slot
             self.ppdu_duration = max(0, remaining - self.radio_transition_time)
+
             if self.ppdu_duration > 0:
                 self.tx_remaining = self.ppdu_duration
                 self.npca_channel.occupy(slot, self.tx_remaining, self.sta_id)
+
+                # ✅ NPCA로 인해 primary 채널에도 OBSS 트래픽을 추가
+                source_obss = OBSSTraffic(
+                    obss_id=f"npca_source_{self.sta_id}_{slot}",
+                    start_slot=slot,
+                    duration=self.tx_remaining
+                )
+                self.primary_channel.add_obss_traffic(source_obss)
+
                 self.state = STAState.NPCA_TX
             else:
                 self.state = STAState.PRIMARY_BACKOFF
                 self.backoff = self.generate_backoff()
+
+
 
     def _handle_npca_frozen(self, slot: int):
         if not self.npca_channel.is_busy(slot):
@@ -215,13 +247,12 @@ class Simulator:
             row[f"states_ch_{ch_id}"] = [sta.state.name.lower() for sta in stas_in_ch]
             row[f"backoff_ch_{ch_id}"] = [sta.backoff for sta in stas_in_ch]
             row[f"npca_enabled_ch_{ch_id}"] = [sta.npca_enabled for sta in stas_in_ch]
-
-        row[f"channel_{ch_id}_occupied_remained"] = (
-            max(ch.current_occupancy[1] - slot, 0) if ch.current_occupancy else 0
-        )
-        row[f"channel_{ch_id}_obss_occupied_remained"] = (
-            max((obss.end_slot - slot for obss in ch.obss_traffic), default=0)
-        )
+            row[f"channel_{ch_id}_occupied_remained"] = (
+                max(ch.current_occupancy[1] - slot, 0) if ch.current_occupancy else 0
+                )
+            row[f"channel_{ch_id}_obss_occupied_remained"] = (
+                max((obss.end_slot - slot for obss in ch.obss_traffic), default=0)
+                )
 
         self.log.append(row)
 
