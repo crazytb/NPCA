@@ -1,8 +1,12 @@
 from random_access.random_access import *
+import numpy as np
+
+# Fix random seed for reproducibility
+np.random.seed(42)
 
 def create_sta_scenario(n_legacy: int, n_npca: int) -> Tuple[List[Channel], List[STA]]:
     channels = [
-        Channel(0, obss_generation_rate=0.1, obss_duration_range=(20, 40)),
+        Channel(0, obss_generation_rate=0, obss_duration_range=(20, 40)),
         Channel(1, obss_generation_rate=0.1, obss_duration_range=(20, 40))
     ]
     stas = []
@@ -34,7 +38,7 @@ def create_sta_scenario(n_legacy: int, n_npca: int) -> Tuple[List[Channel], List
 
     return channels, stas
 
-channels, stas = create_sta_scenario(n_legacy=3, n_npca=5)
+channels, stas = create_sta_scenario(n_legacy=2, n_npca=2)
 sim = Simulator(num_slots=200, stas=stas, channels=channels)
 sim.run()
 df = sim.get_dataframe()
