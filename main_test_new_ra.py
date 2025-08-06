@@ -1,13 +1,13 @@
 from random_access.random_access import *
-import numpy as np
+import random
 
 # Fix random seed for reproducibility
-np.random.seed(42)
+random.seed(42)
 
 def create_sta_scenario(n_legacy: int, n_npca: int) -> Tuple[List[Channel], List[STA]]:
     channels = [
         Channel(0, obss_generation_rate=0, obss_duration_range=(20, 40)),
-        Channel(1, obss_generation_rate=0.1, obss_duration_range=(20, 40))
+        Channel(1, obss_generation_rate=0, obss_duration_range=(20, 40))
     ]
     stas = []
     sta_id_counter = 0
