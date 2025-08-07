@@ -13,21 +13,21 @@ base_config = {
     "obss_enabled_per_channel": [False, True],
     # "npca_enabled": [False, True],
     "obss_generation_rate": 0.01,
-    "obss_frame_size_range": (200, 210),  # 범위로 설정
+    "obss_frame_size_range": (20, 50),  # 범위로 설정
 }
 
 # 후보 값
-sta_values = [2, 2]  # 각 채널의 STA 수
-# frame_sizes = [frame_size, frame_size * 10]
-frame_sizes = [frame_size]
-frame_labels = {33: "fshort"}
-npca_options = [[False, True]]  # 추가된 부분
-# npca_options = [[False, True], [False, False]]  # 추가된 부분
+sta_values = [2, 6, 10]  # 각 채널의 STA 수
+frame_sizes = [frame_size, frame_size * 10]
+# frame_sizes = [frame_size]
+frame_labels = {33: "fshort", 33*10: "flong"}
+# npca_options = [[False, True]]  # 추가된 부분
+npca_options = [[False, True], [False, False]]  # 추가된 부분
 
 # 시뮬레이션 설정 생성
 simulation_configs = []
-for ch0 in [0]:
-    for ch1 in [2]:
+for ch0 in sta_values:
+    for ch1 in sta_values:
         for fs in frame_sizes:
             for npca_enabled in npca_options:
                 config = copy.deepcopy(base_config)

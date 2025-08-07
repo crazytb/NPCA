@@ -1,45 +1,50 @@
+import os
+import pandas as pd
+from random_access.configs import simulation_configs
 from random_access.random_access import *
-import random
 
-# Fix random seed for reproducibility
-random.seed(42)
+save_dir = "./sim_results"
+os.makedirs(save_dir, exist_ok=True)
 
-def create_sta_scenario(n_legacy: int, n_npca: int) -> Tuple[List[Channel], List[STA]]:
+for config in simulation_configs:
+    num_slots = config["simulation_time"]
+    stas_per_channel = config["stas_per_channel"]
+    npca_enabled = config["npca_enabled"]
+    frame_size = config["frame_size"]
+    obss_enabled = config["obss_enabled_per_channel"]
+    obss_rate = config["obss_generation_rate"]
+    obss_range = config["obss_frame_size_range"]
+    radio_delay = config.get("radio_delay", 1)
+
+    # 채널 생성
     channels = [
-        Channel(0, obss_generation_rate=0, obss_duration_range=(20, 40)),
-        Channel(1, obss_generation_rate=0, obss_duration_range=(20, 40))
+        Channel(channel_id=0, obss_generation_rate=0),
+        Channel(channel_id=1, obss_generation_rate=obss_rate, obss_duration_range=obss_range if obss_enabled[1] else (0, 0))
     ]
+    
+    # STAs 생성
     stas = []
-    sta_id_counter = 0
-
-    # Legacy STAs on Channel 0
-    for _ in range(n_legacy):
-        sta = STA(
-            sta_id=sta_id_counter,
-            channel_id=0,
-            primary_channel=channels[0],
-            npca_channel=None,
-            npca_enabled=False
-        )
-        stas.append(sta)
-        sta_id_counter += 1
-
-    # NPCA STAs on Channel 1, using channel 0 as NPCA channel
-    for _ in range(n_npca):
-        sta = STA(
-            sta_id=sta_id_counter,
-            channel_id=1,
-            primary_channel=channels[1],
-            npca_channel=channels[0],
-            npca_enabled=True
-        )
-        stas.append(sta)
-        sta_id_counter += 1
-
-    return channels, stas
-
-channels, stas = create_sta_scenario(n_legacy=2, n_npca=2)
-sim = Simulator(num_slots=200, stas=stas, channels=channels)
-sim.run()
-df = sim.get_dataframe()
-df.to_csv("sim_result.csv", index=False)
+    sta_id = 0
+    for ch_id, num_stas in enumerate(stas_per_channel):
+        for _ in range(num_stas):
+            sta = STA(
+                sta_id=sta_id,
+                channel_id=ch_id,
+                primary_channel=channels[ch_id],
+                npca_channel=channels[0] if ch_id == 1 else None,
+                npca_enabled=npca_enabled[ch_id],
+                radio_transition_time=radio_delay,
+                ppdu_duration=frame_size
+            )
+            stas.append(sta)
+            sta_id += 1
+    
+    # 시뮬레이터 생성 및 실행
+    sim = Simulator(num_slots=num_slots, channels=channels, stas=stas)
+    sim.run()
+    df = sim.get_dataframe()
+    
+    # 결과 저장
+    # df.to_csv(f"{save_dir}/sim_result_{config['label']}.csv", index=False)
+    df.to_pickle(f"{save_dir}/sim_result_{config['label']}.pkl")
+    print(f"Simulation for {config['label']} completed and saved to {save_dir}/sim_result_{config['label']}.pkl")
