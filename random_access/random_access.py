@@ -51,11 +51,17 @@ class Channel:
 
         # OBSS 트래픽 리스트: (obss_id, start_slot, duration, source_bss)
         self.obss_traffic: List[Tuple[str, int, int, int]] = []
+        
+        # 남은 점유시간 캐시 (슬롯마다 update에서 갱신)
+        self.occupied_remain = 0        # intra-BSS 점유 남은 시간
+        self.obss_remain = 0            # OBSS 점유 남은 시간
 
     def occupy(self, slot: int, duration: int, sta_id: int):
         """STA가 채널을 점유함 (intra-BSS 점유)"""
         self.intra_occupied = True
         self.intra_end_slot = slot + duration
+         # 캐시를 즉시 반영 (옵션이지만 추천)
+        self.occupied_remain = duration
 
     def add_obss_traffic(self, req: OccupyRequest, slot: int):
         """NPCA 전송을 OBSS 트래픽으로 기록"""
@@ -68,22 +74,33 @@ class Channel:
         self.obss_traffic.append(obss_tuple)
 
     def is_busy_by_intra_bss(self, slot: int) -> bool:
-        return self.intra_occupied and self.intra_end_slot > slot
+        # return self.intra_occupied and self.intra_end_slot > slot
+        return self.occupied_remain > 0  # update()에서 이미 최신화
 
     def is_busy_by_obss(self, slot: int) -> bool:
-        return any(start <= slot < start + dur for _, start, dur, _ in self.obss_traffic)
+        # return any(start <= slot < start + dur for _, start, dur, _ in self.obss_traffic)
+        return self.obss_remain > 0
 
     def is_busy(self, slot: int) -> bool:
-        return self.is_busy_by_intra_bss(slot) or self.is_busy_by_obss(slot)
+        # return self.is_busy_by_intra_bss(slot) or self.is_busy_by_obss(slot)
+        return (self.occupied_remain > 0) or (self.obss_remain > 0)
 
     def update(self, slot: int):
-        """슬롯마다 상태 갱신: 점유 만료 및 OBSS 제거"""
+        """슬롯마다 상태 갱신: 점유 만료/OBSS 제거 + 남은 점유시간 캐시 갱신"""
         if self.intra_occupied and self.intra_end_slot <= slot:
             self.intra_occupied = False
 
-        self.obss_traffic = [
-            t for t in self.obss_traffic if t[1] + t[2] > slot
-        ]
+        # 유효한 OBSS만 유지
+        self.obss_traffic = [t for t in self.obss_traffic if t[1] + t[2] > slot]
+
+        # 🔁 남은 점유시간 갱신
+        self.occupied_remain = max(0, self.intra_end_slot - slot) if self.intra_occupied else 0
+
+        # 현재 slot에 활성화된 OBSS가 있다면 그 중 "가장 늦게 끝나는" 남은 시간으로 설정
+        # (여러 OBSS가 겹치는 경우를 커버; 단일만 있으면 동일 동작)
+        active_obss = [start + dur - slot for _, start, dur, _ in self.obss_traffic if start <= slot < start + dur]
+        self.obss_remain = max(active_obss) if active_obss else 0
+
 
     def generate_obss(self, slot: int):
         """OBSS 트래픽을 확률적으로 생성"""
@@ -133,7 +150,7 @@ class STA:
         self.state = STAState.PRIMARY_BACKOFF
         self.next_state = self.state
         self.cw_index = 0
-        self.backoff = self.generate_backoff()
+        self.backoff = self.generate_backoff() + 1
         self.tx_remaining = 0
         self.ppdu_duration = ppdu_duration
         # self.current_obss: Optional[OBSSTraffic] = None
@@ -181,9 +198,8 @@ class STA:
         # 1. Primary 채널이 intra-BSS busy: frozen
         if self.primary_channel.is_busy_by_intra_bss(slot):
             self.next_state = STAState.PRIMARY_FROZEN
-            return
         # 2. Primary 채널이 OBSS busy: NPCA enabled 여부에 따라 다름
-        if self.primary_channel.is_busy_by_obss(slot):
+        elif self.primary_channel.is_busy_by_obss(slot):
             # NPCA enabled인 경우
             if self.npca_enabled and self.npca_channel:
                 self.current_obss = self.primary_channel.get_latest_obss(slot)
@@ -196,9 +212,8 @@ class STA:
                     self.next_state = STAState.NPCA_BACKOFF
             else:
                 self.next_state = STAState.PRIMARY_FROZEN
-            return
-        # 3. Primary 채널이 busy하지 않으면 전송 시도
-        if not self.primary_channel.is_busy(slot):
+        # 3. Primary 채널이 idle:
+        else:
             if self.backoff == 0:
                 self.ppdu_duration = self.get_tx_duration()
                 self.tx_remaining = self.ppdu_duration
@@ -208,8 +223,10 @@ class STA:
                     is_obss=False)
                 self.next_state = STAState.PRIMARY_TX
             else:
-                self.backoff -= 1
-            return
+                self.backoff -= 1 if self.backoff > 0 else 0
+        return
+    
+        
 
     def _handle_primary_frozen(self, slot: int):
         if not self.primary_channel.is_busy(slot):
@@ -234,17 +251,27 @@ class STA:
             self.cw_index = 0
 
     def _handle_npca_backoff(self, slot: int):
-        # 1. npca 채널이 intra-BSS로 busy → NPCA_FROZEN
-        if self.npca_channel.is_busy_by_intra_bss(slot):
-            self.next_state = STAState.NPCA_FROZEN
-            return
-        # 2. backoff countdown
-        if self.backoff > 0:
-            self.backoff -= 1
-            return
-        # 3. backoff == 0 → 전송 시도
+        # Similar to _handle_primary_backoff
+        if self.backoff == 0:
+            self.ppdu_duration = self.get_tx_duration()
+            self.tx_remaining = self.ppdu_duration
+            self.occupy_request = OccupyRequest(
+                channel_id=self.npca_channel.channel_id,
+                duration=self.tx_remaining,
+                is_obss=True
+            )
+            self.next_state = STAState.NPCA_TX
+        else:
+            # 1. npca 채널이 busy → NPCA_FROZEN
+            if self.npca_channel.is_busy(slot):
+                self.next_state = STAState.NPCA_FROZEN
+            # 2. npca 채널이 busy하지 않으면 backoff
+            else:
+                self.backoff -= 1 if self.backoff > 0 else 0
+
+            
         if self.current_obss is None:
-            # OBSS duration이 사라졌다면 전송 불가 → stay in NPCA_BACKOFF
+            # OBSS duration이 사라졌다면 전송 불가 → Primary 복귀
             self.next_state = STAState.PRIMARY_BACKOFF
             self.cw_index = 0
             self.backoff = self.generate_backoff()
@@ -258,14 +285,14 @@ class STA:
             # OBSS duration이 끝났음 → stay in NPCA_BACKOFF
             return
 
-        # 4. 전송 준비 완료 → occupy 대상은 원래 primary 채널 (e.g., channel 1의 STA → channel 0 점유)
-        self.tx_remaining = self.ppdu_duration
-        self.occupy_request = OccupyRequest(
-                channel_id=self.npca_channel.channel_id,  # NPCA 채널 ID
-                duration=self.tx_remaining,               # duration
-                is_obss=True                              # OBSS 전송
-            )
-        self.next_state = STAState.NPCA_TX
+        # # 4. 전송 준비 완료 → occupy 대상은 원래 primary 채널 (e.g., channel 1의 STA → channel 0 점유)
+        # self.tx_remaining = self.ppdu_duration
+        # self.occupy_request = OccupyRequest(
+        #         channel_id=self.npca_channel.channel_id,  # NPCA 채널 ID
+        #         duration=self.tx_remaining,               # duration
+        #         is_obss=True                              # OBSS 전송
+        #     )
+        # self.next_state = STAState.NPCA_TX
 
     def _handle_npca_frozen(self, slot: int):
         # OBSS 정보가 더 이상 유효하지 않으면 primary로 복귀
@@ -384,18 +411,21 @@ class Simulator:
             row[f"backoff_ch_{ch_id}"] = [sta.backoff for sta in stas_in_ch]
             row[f"npca_enabled_ch_{ch_id}"] = [sta.npca_enabled for sta in stas_in_ch]
 
-            # OBSS 점유 시간
-            obss_remain = 0
-            for _, start, dur, _ in ch.obss_traffic:
-                if start <= slot < start + dur:
-                    obss_remain = start + dur - slot
-                    break
+            row[f"channel_{ch_id}_occupied_remained"] = ch.occupied_remain
+            row[f"channel_{ch_id}_obss_occupied_remained"] = ch.obss_remain
+            
+            # # OBSS 점유 시간
+            # obss_remain = 0
+            # for _, start, dur, _ in ch.obss_traffic:
+            #     if start <= slot < start + dur:
+            #         obss_remain = start + dur - slot
+            #         break
 
-            # intra-BSS 점유 시간
-            occupied_remain = ch.intra_end_slot - slot if ch.intra_occupied else 0
+            # # intra-BSS 점유 시간
+            # occupied_remain = ch.intra_end_slot - slot if ch.intra_occupied else 0
 
-            row[f"channel_{ch_id}_occupied_remained"] = occupied_remain
-            row[f"channel_{ch_id}_obss_occupied_remained"] = obss_remain
+            # row[f"channel_{ch_id}_occupied_remained"] = occupied_remain
+            # row[f"channel_{ch_id}_obss_occupied_remained"] = obss_remain
 
         self.log.append(row)
 

@@ -45,6 +45,6 @@ for config in simulation_configs:
     df = sim.get_dataframe()
     
     # 결과 저장
-    # df.to_csv(f"{save_dir}/sim_result_{config['label']}.csv", index=False)
+    df.to_csv(f"{save_dir}/sim_result_{config['label']}.csv", index=False)
     df.to_pickle(f"{save_dir}/sim_result_{config['label']}.pkl")
     print(f"Simulation for {config['label']} completed and saved to {save_dir}/sim_result_{config['label']}.pkl")
