@@ -218,8 +218,7 @@ class STA:
         # 3. Primary 채널이 idle:
         else:
             if (self.backoff == 0) and not self.primary_channel.is_busy(slot):
-                self.ppdu_duration = self.get_tx_duration()
-                self.tx_remaining = self.ppdu_duration
+                self.tx_remaining = self.get_tx_duration()
                 self.occupy_request = OccupyRequest(
                     channel_id=self.primary_channel.channel_id, 
                     duration=self.tx_remaining, 
@@ -268,8 +267,7 @@ class STA:
         # 2. NPCA 채널이 idle: backoff
         else:
             if (self.backoff == 0) and not self.npca_channel.is_busy(slot):
-                self.ppdu_duration = self.get_tx_duration(is_npca=True)
-                self.tx_remaining = self.ppdu_duration
+                self.tx_remaining = self.get_tx_duration(is_npca=True)
                 self.occupy_request = OccupyRequest(
                     channel_id=self.npca_channel.channel_id,
                     duration=self.tx_remaining,
