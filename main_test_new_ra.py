@@ -11,7 +11,6 @@ for config in simulation_configs:
     stas_per_channel = config["stas_per_channel"]
     npca_enabled = config["npca_enabled"]
     frame_size = config["frame_size"]
-    obss_enabled = config["obss_enabled_per_channel"]
     obss_rate = config["obss_generation_rate"]
     obss_range = config["obss_frame_size_range"]
     radio_delay = config.get("radio_delay", 1)
@@ -19,7 +18,8 @@ for config in simulation_configs:
     # 채널 생성
     channels = [
         Channel(channel_id=0, obss_generation_rate=0),
-        Channel(channel_id=1, obss_generation_rate=obss_rate, obss_duration_range=obss_range if obss_enabled[1] else (0, 0))
+        # Channel(channel_id=1, obss_generation_rate=obss_rate, obss_duration_range=obss_range)
+        Channel(channel_id=1, obss_generation_rate=0, obss_duration_range=obss_range)
     ]
     
     # STAs 생성
