@@ -1,7 +1,7 @@
 import copy
 
 # Configuration
-simulation_time = 200_000  # Total simulation time in us
+simulation_time = 10_000  # Total simulation time in us
 simulation_slot = simulation_time // 9  # Slot duration in us (9us for 802.11ax)
 frame_size = 33  # Size of each frame in slots
 # stas_per_channel = [2, 2]  # Number of STAs per channel
@@ -17,8 +17,8 @@ base_config = {
 }
 
 # 후보 값
-sta_values = [2, 6, 10]  # 각 채널의 STA 수
-# sta_values = [4]  # 각 채널의 STA 수
+# sta_values = [2, 6, 10]  # 각 채널의 STA 수
+sta_values = [2]  # 각 채널의 STA 수
 frame_sizes = [frame_size, frame_size * 10]
 # frame_sizes = [frame_size]
 frame_labels = {33: "fshort", 33*10: "flong"}
