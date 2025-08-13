@@ -1,7 +1,7 @@
 import copy
 
 # Configuration
-simulation_time = 1_000_000  # Total simulation time in us
+simulation_time = 500_000  # Total simulation time in us
 simulation_slot = simulation_time // 9  # Slot duration in us (9us for 802.11ax)
 frame_size = 33  # Size of each frame in slots
 # stas_per_channel = [2, 2]  # Number of STAs per channel
@@ -12,7 +12,7 @@ base_config = {
     "simulation_time": simulation_time,
     "obss_enabled_per_channel": [False, True],
     # "npca_enabled": [False, True],
-    "obss_generation_rate": 0.01,
+    "obss_generation_rate": 0.05,
     "obss_frame_size_range": (20, 201),  # 범위로 설정
 }
 

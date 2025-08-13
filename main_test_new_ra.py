@@ -18,8 +18,7 @@ for config in simulation_configs:
     # 채널 생성
     channels = [
         Channel(channel_id=0, obss_generation_rate=0),
-        # Channel(channel_id=1, obss_generation_rate=obss_rate, obss_duration_range=obss_range)
-        Channel(channel_id=1, obss_generation_rate=0.001, obss_duration_range=obss_range)
+        Channel(channel_id=1, obss_generation_rate=obss_rate, obss_duration_range=obss_range)
     ]
     
     # STAs 생성
