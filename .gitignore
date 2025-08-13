@@ -1,12 +1,5 @@
 # CSMA/CA Simulation Generated Files
-*.csv
-*_log.csv
-*_fsm_log.csv
-simplified_csma_ca_fsm_log.csv
-csma_ca_fsm_log.csv
-test.csv
 sim_results/
-*.pkl
 
 # Python
 __pycache__/
